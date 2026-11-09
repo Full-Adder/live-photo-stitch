@@ -31,7 +31,12 @@ fun TemplateSelectionScreen(
     onNextClick: () -> Unit,
     onBackClick: () -> Unit
 ) {
-    var selectedTemplate by remember { mutableStateOf(TemplateSelectionScreenDefaults.defaultTemplate) }
+    // 从全局状态读取默认选择，支持返回时保留
+    var selectedTemplate by remember {
+        mutableStateOf(
+            StitchProjectState.template ?: TemplateSelectionScreenDefaults.defaultTemplate
+        )
+    }
     
     Scaffold(
         topBar = {
