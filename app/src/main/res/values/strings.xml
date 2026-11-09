@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">实况照片拼接</string>
+    <string name="home_title">实况照片拼接</string>
+    <string name="home_subtitle">让每张照片都生动起来</string>
+    <string name="start_creation">开始创作</string>
+    <string name="select_photos">选择照片</string>
+    <string name="select_template">选择模板</string>
+    <string name="edit">编辑</string>
+    <string name="preview">预览</string>
+    <string name="save">保存</string>
+    <string name="share">分享</string>
+    <string name="back">返回</string>
+    <string name="next">下一步</string>
+    
+    <!-- 功能描述 -->
+    <string name="feature_stitch_title">智能拼接</string>
+    <string name="feature_stitch_desc">3张照片，多种模板，一键生成实况照片</string>
+    <string name="feature_cutout_title">智能抠图</string>
+    <string name="feature_cutout_desc">AI智能识别人物</string>
+    <string name="feature_xiaomi_cutout">支持小米手机AI抠图</string>
+    <string name="feature_background_title">背景处理</string>
+    <string name="feature_background_desc">人物放大、智能裁剪，突出主体</string>
+    
+    <!-- 小米优化 -->
+    <string name="xiaomi_optimization">小米手机专属优化</string>
+    <string name="xiaomi_gpu_turbo">已启用GPU Turbo加速</string>
+    <string name="xiaomi_ai_cutout">小米AI抠图已启用</string>
+    <string name="xiaomi_ai_engine">使用小米相机AI引擎，抠图更精准</string>
+    
+    <!-- 提示信息 -->
+    <string name="select_3_photos">请选择3张实况照片</string>
+    <string name="select_template_desc">选择你喜欢的照片布局</string>
+    <string name="photos_selected">已选 %d/3 张照片</string>
+    <string name="ready_to_next">已选择3张照片，点击"下一步"选择模板</string>
+    
+    <!-- 工具名称 -->
+    <string name="tool_zoom">缩放</string>
+    <string name="tool_cutout">抠图</string>
+    <string name="tool_filter">滤镜</string>
+    <string name="tool_rotate">旋转</string>
+    
+    <!-- 操作提示 -->
+    <string name="auto_recognize">自动识别</string>
+    <string name="manual_adjust">手动调整</string>
+    <string name="saving">正在保存...</string>
+    <string name="processing">正在生成实况照片...</string>
+    <string name="save_success">保存成功！</string>
+    <string name="long_press_preview">长按查看动态效果</string>
+    
+    <!-- 保存选项 -->
+    <string name="save_options">保存选项</string>
+    <string name="save_as_live_photo">保存为实况照片</string>
+    <string name="live_photo_desc">包含静态图片和短视频</string>
+    <string name="cancel">取消</string>
+</resources>

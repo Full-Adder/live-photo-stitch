@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        基础主题。Compose 应用使用平台主题即可，
+        MaterialTheme 的颜色由 Compose 内部的 LivePhotoStitchTheme 控制。
+    -->
+    <style name="Theme.LivePhotoStitch" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>
