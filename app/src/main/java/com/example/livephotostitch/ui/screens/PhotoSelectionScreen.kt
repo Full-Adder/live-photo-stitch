@@ -122,14 +122,11 @@ fun PhotoSelectionScreen(
                         photo = photo,
                         isSelected = currentSlotIndex == index,
                         onClick = {
-                            if (photo == null) {
-                                currentSlotIndex = index
-                                pickMedia.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
-                                )
-                            } else {
-                                currentSlotIndex = index
-                            }
+                            // 空位：直接选图；已选：点击可替换
+                            currentSlotIndex = index
+                            pickMedia.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                            )
                         },
                         onRemove = {
                             selectedPhotos = selectedPhotos.toMutableList().apply {
