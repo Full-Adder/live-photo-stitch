@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RectF
+import android.media.ExifInterface
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
@@ -15,6 +16,7 @@ import android.net.Uri
 import com.example.livephotostitch.data.model.LivePhoto
 import com.example.livephotostitch.data.model.StitchTemplate
 import com.example.livephotostitch.data.model.TemplateItem
+import com.example.livephotostitch.utils.LivePhotoUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -32,7 +34,13 @@ data class PhotoEffect(
     /** 人物在照片中的水平中心位置 (0-1) */
     val personCenterX: Float = 0.5f,
     /** 人物在照片中的垂直中心位置 (0-1) */
-    val personCenterY: Float = 0.5f
+    val personCenterY: Float = 0.5f,
+    /** 手动裁剪位置 - 水平 (-1 靠左 .. 0 居中 .. 1 靠右) */
+    val cropOffsetX: Float = 0f,
+    /** 手动裁剪位置 - 垂直 (-1 靠上 .. 0 居中 .. 1 靠下) */
+    val cropOffsetY: Float = 0f,
+    /** 背景画面缩放 (1.0 = 刚好铺满格子；>1 放大裁切更多) */
+    val backgroundZoom: Float = 1f
 )
 
 /**
@@ -72,7 +80,8 @@ class LivePhotoStitchEngine(private val context: Context) {
                 bitmaps = bitmaps,
                 template = template,
                 outputWidth = outputWidth,
-                outputHeight = outputHeight
+                outputHeight = outputHeight,
+                effects = effects
             )
 
             // 4. 处理前景层（抠图+放大，人物可超出格子）
@@ -121,12 +130,15 @@ class LivePhotoStitchEngine(private val context: Context) {
 
     /**
      * 绘制背景层 —— 所有照片裁剪填充到各自格子（紧凑，无间距）
+     *
+     * @param effects 用于读取每张照片的手动裁剪位置
      */
     private fun composeBackground(
         bitmaps: List<Bitmap>,
         template: StitchTemplate,
         outputWidth: Int,
-        outputHeight: Int
+        outputHeight: Int,
+        effects: List<PhotoEffect> = emptyList()
     ): Bitmap {
         val outputBitmap = Bitmap.createBitmap(outputWidth, outputHeight, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(outputBitmap)
@@ -137,8 +149,17 @@ class LivePhotoStitchEngine(private val context: Context) {
         template.layout.forEachIndexed { index, item ->
             if (index < bitmaps.size) {
                 val bitmap = bitmaps[index]
+                val effect = effects.getOrNull(index)
                 val destRect = item.toRectF(outputWidth, outputHeight)
-                drawBitmapCropToFill(canvas, bitmap, destRect, paint)
+                drawBitmapCropToFill(
+                    canvas = canvas,
+                    bitmap = bitmap,
+                    destRect = destRect,
+                    paint = paint,
+                    offsetX = effect?.cropOffsetX ?: 0f,
+                    offsetY = effect?.cropOffsetY ?: 0f,
+                    zoom = effect?.backgroundZoom ?: 1f
+                )
             }
         }
 
@@ -172,27 +193,74 @@ class LivePhotoStitchEngine(private val context: Context) {
 
             val cutoutResult = cutoutProcessor.cutout(bitmap) ?: return@forEachIndexed
 
-            val zoomedPerson = cutoutProcessor.zoomPerson(
+            // 直接把「未裁剪的人物」按矩阵画到整张画布上，
+            // 人物放大后可以自然溢出到相邻格子（不会被自己的格子裁掉）
+            drawZoomedPerson(
+                canvas = canvas,
                 personBitmap = cutoutResult.personBitmap,
-                maskBitmap = cutoutResult.maskBitmap,
+                photoBitmap = bitmap,
+                destRect = destRect,
                 zoomLevel = effect.zoomLevel,
                 centerX = effect.personCenterX,
-                centerY = effect.personCenterY
+                centerY = effect.personCenterY,
+                cropOffsetX = effect.cropOffsetX,
+                cropOffsetY = effect.cropOffsetY,
+                backgroundZoom = effect.backgroundZoom
             )
-
-            val (scaleFactor, offsetX, offsetY) = calcPlacement(bitmap, destRect)
-
-            val scaledPersonWidth = (zoomedPerson.width * scaleFactor).toInt()
-            val scaledPersonHeight = (zoomedPerson.height * scaleFactor).toInt()
-            val scaledPerson = Bitmap.createScaledBitmap(
-                zoomedPerson, scaledPersonWidth, scaledPersonHeight, true
-            )
-
-            canvas.drawBitmap(scaledPerson, offsetX, offsetY, Paint(Paint.ANTI_ALIAS_FLAG))
             hasForeground = true
         }
 
         return if (hasForeground) foregroundBitmap else null
+    }
+
+    /**
+     * 把抠出来的人物按「裁剪填充 + 以人物中心放大」的矩阵画到画布上
+     *
+     * 之前用 zoomPerson 返回同尺寸 bitmap，人物会被自身格子裁掉，
+     * 永远不可能超出边界。改成直接对整个画布做矩阵变换即可自然溢出。
+     */
+    private fun drawZoomedPerson(
+        canvas: Canvas,
+        personBitmap: Bitmap,
+        photoBitmap: Bitmap,
+        destRect: RectF,
+        zoomLevel: Float,
+        centerX: Float,
+        centerY: Float,
+        cropOffsetX: Float = 0f,
+        cropOffsetY: Float = 0f,
+        backgroundZoom: Float = 1f
+    ) {
+        val photoW = photoBitmap.width.toFloat()
+        val photoH = photoBitmap.height.toFloat()
+        if (photoW <= 0f || photoH <= 0f) return
+
+        // 1) 裁剪填充：photo 填满 destRect（与背景层保持完全一致的裁剪位置与缩放）
+        val bgZoom = if (backgroundZoom < 1f) 1f else backgroundZoom
+        val scale = maxOf(destRect.width() / photoW, destRect.height() / photoH) * bgZoom
+        val extraW = destRect.width() - photoW * scale    // <= 0
+        val extraH = destRect.height() - photoH * scale   // <= 0
+        val fx = ((cropOffsetX.coerceIn(-1f, 1f) + 1f) / 2f)
+        val fy = ((cropOffsetY.coerceIn(-1f, 1f) + 1f) / 2f)
+
+        val dx = destRect.left + extraW * fx
+        val dy = destRect.top + extraH * fy
+
+        val matrix = Matrix()
+        matrix.postScale(scale, scale)
+        matrix.postTranslate(dx, dy)
+
+        // 2) 以人物中心为锚点放大（锚点换算到画布坐标）
+        val anchorX = dx + centerX * photoW * scale
+        val anchorY = dy + centerY * photoH * scale
+        val zoom = if (zoomLevel < 1f) 1f else zoomLevel
+        matrix.postScale(zoom, zoom, anchorX, anchorY)
+
+        canvas.drawBitmap(
+            personBitmap,
+            matrix,
+            Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        )
     }
 
     /**
@@ -333,58 +401,74 @@ class LivePhotoStitchEngine(private val context: Context) {
 
         val firstVideoIndex = photos.indexOf(firstVideoPhoto)
 
-        // 关键优化：把每张照片的「放大人物」只算一次，缓存起来复用
-        val cachedZoomed = mutableListOf<Pair<Bitmap, Triple<Float, Float, Float>>?>()
+        // 关键优化：把每张照片的「人物」只抠一次，之后每帧都用矩阵重绘
+        data class PersonLayer(
+            val person: Bitmap,
+            val photo: Bitmap,
+            val destRect: RectF,
+            val zoom: Float,
+            val cx: Float,
+            val cy: Float,
+            val cropX: Float,
+            val cropY: Float,
+            val bgZoom: Float
+        )
+
+        val personLayers = mutableListOf<PersonLayer?>()
 
         if (cutoutProcessor != null) {
             effects.forEachIndexed { index, effect ->
                 if (!effect.cutoutEnabled || effect.zoomLevel <= 1.0f ||
                     index >= bitmaps.size || index >= template.layout.size
                 ) {
-                    cachedZoomed.add(null)
+                    personLayers.add(null)
                     return@forEachIndexed
                 }
 
                 val bitmap = bitmaps[index]
-                val destRect = template.layout[index].toRectF(outputWidth, outputHeight)
                 val cutoutResult = cutoutProcessor.cutout(bitmap)
                 if (cutoutResult == null) {
-                    cachedZoomed.add(null)
+                    personLayers.add(null)
                     return@forEachIndexed
                 }
 
-                val zoomedPerson = cutoutProcessor.zoomPerson(
-                    personBitmap = cutoutResult.personBitmap,
-                    maskBitmap = cutoutResult.maskBitmap,
-                    zoomLevel = effect.zoomLevel,
-                    centerX = effect.personCenterX,
-                    centerY = effect.personCenterY
+                personLayers.add(
+                    PersonLayer(
+                        person = cutoutResult.personBitmap,
+                        photo = bitmap,
+                        destRect = template.layout[index].toRectF(outputWidth, outputHeight),
+                        zoom = effect.zoomLevel,
+                        cx = effect.personCenterX,
+                        cy = effect.personCenterY,
+                        cropX = effect.cropOffsetX,
+                        cropY = effect.cropOffsetY,
+                        bgZoom = effect.backgroundZoom
+                    )
                 )
-
-                val (scaleFactor, offsetX, offsetY) = calcPlacement(bitmap, destRect)
-                val scaledPerson = Bitmap.createScaledBitmap(
-                    zoomedPerson,
-                    (zoomedPerson.width * scaleFactor).toInt(),
-                    (zoomedPerson.height * scaleFactor).toInt(),
-                    true
-                )
-                cachedZoomed.add(scaledPerson to Triple(scaleFactor, offsetX, offsetY))
             }
         }
 
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-
         fun composeFrame(frameBitmaps: List<Bitmap>): Bitmap {
-            val frameBackground = composeBackground(frameBitmaps, template, outputWidth, outputHeight)
-            val merged = mergeLayers(frameBackground, null)
+            val merged = composeBackground(
+                frameBitmaps, template, outputWidth, outputHeight, effects
+            )
+            val canvas = Canvas(merged)
 
-            // 叠加缓存的人物层
-            cachedZoomed.forEachIndexed { index, entry ->
-                if (entry != null && index < effects.size) {
-                    val (person, placement) = entry
-                    val (_, offsetX, offsetY) = placement
-                    val canvas = Canvas(merged)
-                    canvas.drawBitmap(person, offsetX, offsetY, paint)
+            // 叠加人物层（与静态图使用同一套矩阵逻辑，保证效果一致）
+            personLayers.forEach { layer ->
+                if (layer != null) {
+                    drawZoomedPerson(
+                        canvas = canvas,
+                        personBitmap = layer.person,
+                        photoBitmap = layer.photo,
+                        destRect = layer.destRect,
+                        zoomLevel = layer.zoom,
+                        centerX = layer.cx,
+                        centerY = layer.cy,
+                        cropOffsetX = layer.cropX,
+                        cropOffsetY = layer.cropY,
+                        backgroundZoom = layer.bgZoom
+                    )
                 }
             }
             return merged
@@ -445,8 +529,11 @@ class LivePhotoStitchEngine(private val context: Context) {
             // 创建编码器 — 使用 ByteBuffer 输入方式
             codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
 
+            // 明确指定编码器真正支持的色彩格式，避免用 Flexible 时出现红蓝反色
+            val colorFormat = pickSupportedColorFormat(codec)
+
             val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, encWidth, encHeight).apply {
-                setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
+                setInteger(MediaFormat.KEY_COLOR_FORMAT, colorFormat)
                 setInteger(MediaFormat.KEY_BIT_RATE, 4_000_000)
                 setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
                 setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
@@ -461,7 +548,7 @@ class LivePhotoStitchEngine(private val context: Context) {
             var muxerStarted = false
             var trackIndex = -1
 
-            // 将每帧转换为 YUV420SP (NV12) 并输入编码器
+            // 将每帧转换为编码器支持的 YUV 格式并输入编码器
             val frameDurationUs = 1_000_000L / frameRate
             var frameIndex = 0
 
@@ -473,17 +560,17 @@ class LivePhotoStitchEngine(private val context: Context) {
                     frame
                 }
 
-                // 转换为 NV12 (YUV420SP)
-                val nv12 = bitmapToNV12(scaled, encWidth, encHeight)
+                // 按编码器支持的格式转换
+                val yuv = bitmapToYuv(scaled, encWidth, encHeight, colorFormat)
 
                 // 输入到编码器
                 val inputBufferId = codec.dequeueInputBuffer(10_000)
                 if (inputBufferId >= 0) {
                     val inputBuffer = codec.getInputBuffer(inputBufferId)
                     inputBuffer?.clear()
-                    inputBuffer?.put(nv12)
+                    inputBuffer?.put(yuv)
                     val ptsUs = frameIndex * frameDurationUs
-                    codec.queueInputBuffer(inputBufferId, 0, nv12.size, ptsUs, 0)
+                    codec.queueInputBuffer(inputBufferId, 0, yuv.size, ptsUs, 0)
                 }
                 frameIndex++
 
@@ -546,17 +633,55 @@ class LivePhotoStitchEngine(private val context: Context) {
     }
 
     /**
-     * 将 Bitmap 转换为 NV12 (YUV420SP) 格式
+     * 选出编码器真正支持的 YUV 色彩格式
+     *
+     * 用 COLOR_FormatYUV420Flexible 时，实际内存布局由编码器决定，
+     * 我们按 NV12 写进去在某些设备上会出现红蓝反色。
+     * 所以优先选明确的 SemiPlanar(NV12) / Planar(I420)。
      */
-    private fun bitmapToNV12(bitmap: Bitmap, width: Int, height: Int): ByteArray {
+    private fun pickSupportedColorFormat(codec: MediaCodec): Int {
+        val supported = try {
+            codec.codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC).colorFormats
+        } catch (e: Exception) {
+            intArrayOf()
+        }
+
+        val semiPlanar = 0x15   // COLOR_FormatYUV420SemiPlanar (NV12)
+        val planar = 0x13       // COLOR_FormatYUV420Planar (I420)
+
+        return when {
+            supported.contains(semiPlanar) -> semiPlanar
+            supported.contains(planar) -> planar
+            else -> MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible
+        }
+    }
+
+    /**
+     * Bitmap → YUV420
+     *
+     * @param colorFormat 编码器支持的色彩格式
+     *   - 0x15 SemiPlanar(NV12)：YYYY + UVUV...
+     *   - 0x13 Planar(I420)：YYYY + UUUU + VVVV
+     *   - Flexible：按 NV12 处理
+     */
+    private fun bitmapToYuv(
+        bitmap: Bitmap,
+        width: Int,
+        height: Int,
+        colorFormat: Int
+    ): ByteArray {
         val argb = IntArray(width * height)
         bitmap.getPixels(argb, 0, width, 0, 0, width, height)
 
-        val yuv = ByteArray(width * height * 3 / 2)
+        val ySize = width * height
+        val uvSize = ySize / 4
+        val yuv = ByteArray(ySize + uvSize * 2)
 
-        // 转换 ARGB -> YUV
+        val isPlanar = colorFormat == 0x13
+
         var yIndex = 0
-        var uvIndex = width * height
+        var uIndex = if (isPlanar) ySize else ySize
+        var vIndex = if (isPlanar) ySize + uvSize else ySize + 1
 
         for (j in 0 until height) {
             for (i in 0 until width) {
@@ -565,16 +690,23 @@ class LivePhotoStitchEngine(private val context: Context) {
                 val g = (pixel shr 8) and 0xFF
                 val b = pixel and 0xFF
 
-                // Y
+                // Y 分量
                 val y = ((66 * r + 129 * g + 25 * b + 128) shr 8) + 16
                 yuv[yIndex++] = y.coerceIn(0, 255).toByte()
 
-                // UV (每 2x2 采样一次)
+                // U/V 分量：每 2x2 采样一次
                 if (j % 2 == 0 && i % 2 == 0) {
                     val u = ((-38 * r - 74 * g + 112 * b + 128) shr 8) + 128
                     val v = ((112 * r - 94 * g - 18 * b + 128) shr 8) + 128
-                    yuv[uvIndex++] = u.coerceIn(0, 255).toByte()
-                    yuv[uvIndex++] = v.coerceIn(0, 255).toByte()
+                    yuv[uIndex] = u.coerceIn(0, 255).toByte()
+                    yuv[vIndex] = v.coerceIn(0, 255).toByte()
+                    if (isPlanar) {
+                        uIndex++
+                        vIndex++
+                    } else {
+                        uIndex += 2
+                        vIndex += 2
+                    }
                 }
             }
         }
@@ -583,26 +715,46 @@ class LivePhotoStitchEngine(private val context: Context) {
     }
 
     /**
-     * 将图片裁剪填充到指定矩形区域（居中裁剪，填满整个格子）
+     * 将图片裁剪填充到指定矩形区域
+     *
+     * @param offsetX 手动裁剪位置 -1(靠左) .. 0(居中) .. 1(靠右)
+     * @param offsetY 手动裁剪位置 -1(靠上) .. 0(居中) .. 1(靠下)
      */
-    private fun drawBitmapCropToFill(canvas: Canvas, bitmap: Bitmap, destRect: RectF, paint: Paint) {
+    private fun drawBitmapCropToFill(
+        canvas: Canvas,
+        bitmap: Bitmap,
+        destRect: RectF,
+        paint: Paint,
+        offsetX: Float = 0f,
+        offsetY: Float = 0f,
+        zoom: Float = 1f
+    ) {
         val srcAspect = bitmap.width.toFloat() / bitmap.height
         val destAspect = destRect.width() / destRect.height()
+
+        // -1..1 → 0..1（0 = 居中）
+        val fx = ((offsetX.coerceIn(-1f, 1f) + 1f) / 2f)
+        val fy = ((offsetY.coerceIn(-1f, 1f) + 1f) / 2f)
+        val bgZoom = if (zoom < 1f) 1f else zoom
 
         val matrix = Matrix()
 
         if (srcAspect > destAspect) {
-            val scale = destRect.height() / bitmap.height
+            // 图片更宽 → 按高度铺满，水平方向有多余，可左右移动
+            val scale = destRect.height() / bitmap.height * bgZoom
             matrix.setScale(scale, scale)
             val scaledWidth = bitmap.width * scale
-            val offsetX = (destRect.width() - scaledWidth) / 2
-            matrix.postTranslate(destRect.left + offsetX, destRect.top)
+            val extra = destRect.width() - scaledWidth     // 负数
+            val vertical = (destRect.height() - bitmap.height * scale) / 2f
+            matrix.postTranslate(destRect.left + extra * fx, destRect.top + vertical)
         } else {
-            val scale = destRect.width() / bitmap.width
+            // 图片更高 → 按宽度铺满，垂直方向有多余，可上下移动
+            val scale = destRect.width() / bitmap.width * bgZoom
             matrix.setScale(scale, scale)
             val scaledHeight = bitmap.height * scale
-            val offsetY = (destRect.height() - scaledHeight) / 2
-            matrix.postTranslate(destRect.left, destRect.top + offsetY)
+            val extra = destRect.height() - scaledHeight   // 负数
+            val horizontal = (destRect.width() - bitmap.width * scale) / 2f
+            matrix.postTranslate(destRect.left + horizontal, destRect.top + extra * fy)
         }
 
         canvas.drawBitmap(bitmap, matrix, paint)
@@ -630,11 +782,51 @@ class LivePhotoStitchEngine(private val context: Context) {
 
     /**
      * 加载 Bitmap
+     *
+     * 注意：必须处理 EXIF 方向，否则竖拍照片会被当成横向渲染（画面被裁歪）。
+     * 同时限制最大边长，避免超大图（如 8000px）导致 OOM。
      */
     private fun loadBitmap(uri: Uri): Bitmap {
-        return context.contentResolver.openInputStream(uri)?.use { stream ->
-            android.graphics.BitmapFactory.decodeStream(stream)
+        // 1. 先读尺寸与方向
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        try {
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                android.graphics.BitmapFactory.decodeStream(stream, null, bounds)
+            }
+        } catch (e: Exception) {
+            // 忽略，下面正常解码会抛出更明确的信息
+        }
+
+        var orientation = ExifInterface.ORIENTATION_NORMAL
+        try {
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                orientation = ExifInterface(stream).getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL
+                )
+            }
+        } catch (e: Exception) {
+            // 忽略
+        }
+
+        // 2. 计算采样率（最大边 2560，足够 1080 宽输出）
+        val maxSide = maxOf(bounds.outWidth, bounds.outHeight)
+        var sampleSize = 1
+        while (maxSide / sampleSize > 2560) {
+            sampleSize *= 2
+        }
+
+        val options = android.graphics.BitmapFactory.Options().apply {
+            inSampleSize = sampleSize
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+
+        val decoded = context.contentResolver.openInputStream(uri)?.use { stream ->
+            android.graphics.BitmapFactory.decodeStream(stream, null, options)
         } ?: throw IllegalArgumentException("Failed to load bitmap from $uri")
+
+        // 3. 应用 EXIF 旋转
+        return LivePhotoUtils.applyExifOrientation(decoded, orientation)
     }
 
     /**
