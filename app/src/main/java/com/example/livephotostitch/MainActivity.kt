@@ -42,16 +42,16 @@ class MainActivity : ComponentActivity() {
 fun LivePhotoStitchApp() {
     val navController = rememberNavController()
 
-    // 重置状态
-    androidx.compose.runtime.LaunchedEffect(Unit) {
-        StitchProjectState.reset()
-    }
-
     NavHost(
         navController = navController,
         startDestination = "home"
     ) {
         composable("home") {
+            // 每次进入首页时重置状态
+            androidx.compose.runtime.LaunchedEffect(Unit) {
+                StitchProjectState.reset()
+            }
+
             HomeScreen(
                 onStartClick = { navController.navigate("photo_selection") }
             )
@@ -82,6 +82,7 @@ fun LivePhotoStitchApp() {
             PreviewScreen(
                 onBackClick = { navController.popBackStack() },
                 onDoneClick = {
+                    // 返回首页并重置状态
                     navController.popBackStack("home", inclusive = false)
                 }
             )
