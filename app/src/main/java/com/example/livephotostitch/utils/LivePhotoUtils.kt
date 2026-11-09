@@ -1,12 +1,13 @@
 package com.example.livephotostitch.utils
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.net.Uri
-import android.provider.MediaStore
+import android.graphics.Matrix
+import android.media.ExifInterface
 import android.media.MediaMetadataRetriever
-import android.media.MediaExtractor
-import android.media.MediaFormat
+import android.net.Uri
+import android.provider.OpenableColumns
 import com.example.livephotostitch.data.model.LivePhoto
 import java.io.File
 import java.io.FileOutputStream
@@ -18,68 +19,125 @@ import java.util.UUID
 object LivePhotoUtils {
 
     /**
-     * 从Uri创建LivePhoto对象
+     * 从 Uri 创建 LivePhoto。
      *
-     * 支持：
-     * - Android 实况照片（通过 MediaMetadataRetriever 检测视频）
-     * - 普通图片
+     * 支持三种来源：
+     * 1. 普通图片 —— 直接作为静态图
+     * 2. 视频文件 —— 抽取首帧作为静态图，视频本身作为动态部分
+     * 3. 实况照片（JPEG + 内嵌 MP4）—— 目前按普通图片处理（内嵌视频暂不解析）
+     *
+     * 关键：选择器用 ImageAndVideo 时用户可能选中视频，如果不做处理，
+     * 后面的 BitmapFactory.decodeStream 会返回 null 直接导致整套流程崩溃。
      */
     fun createLivePhotoFromUri(context: Context, uri: Uri): LivePhoto {
+        val isVideo = isVideoUri(context, uri)
+
+        return if (isVideo) {
+            createFromVideo(context, uri)
+        } else {
+            createFromImage(context, uri)
+        }
+    }
+
+    /**
+     * 判断 Uri 指向的是否为视频文件
+     */
+    private fun isVideoUri(context: Context, uri: Uri): Boolean {
+        // 1. 先看 MIME
+        val mime = try {
+            context.contentResolver.getType(uri)
+        } catch (e: Exception) {
+            null
+        }
+        if (mime != null) {
+            return mime.startsWith("video/")
+        }
+
+        // 2. 再看文件名后缀
+        val name = getDisplayName(context, uri)?.lowercase()
+        if (name != null) {
+            return name.endsWith(".mp4") || name.endsWith(".mov") ||
+                name.endsWith(".3gp") || name.endsWith(".mkv") ||
+                name.endsWith(".webm") || name.endsWith(".avi") ||
+                name.endsWith(".m4v")
+        }
+
+        return false
+    }
+
+    private fun getDisplayName(context: Context, uri: Uri): String? {
+        return try {
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+                ?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        if (idx >= 0) cursor.getString(idx) else null
+                    } else {
+                        null
+                    }
+                }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * 视频 → 抽取首帧作为静态图
+     */
+    private fun createFromVideo(context: Context, uri: Uri): LivePhoto {
+        val retriever = MediaMetadataRetriever()
         var width = 0
         var height = 0
         var duration = 0L
-        var videoUri: Uri? = null
-        var creationDate = System.currentTimeMillis()
+        var frameFile: File? = null
 
-        // 尝试用 MediaMetadataRetriever 读取
         try {
-            val retriever = MediaMetadataRetriever()
             retriever.setDataSource(context, uri)
 
-            width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
-            height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
-            duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
-            val dateStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE)
-            if (dateStr != null) {
-                // 尝试解析日期
-                creationDate = try {
-                    dateStr.toLongOrNull() ?: System.currentTimeMillis()
-                } catch (e: Exception) {
-                    System.currentTimeMillis()
-                }
+            width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+                ?.toIntOrNull() ?: 0
+            height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+                ?.toIntOrNull() ?: 0
+            duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                ?.toLongOrNull() ?: 0L
+
+            // 旋转信息
+            val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+                ?.toIntOrNull() ?: 0
+            if (rotation == 90 || rotation == 270) {
+                val tmp = width
+                width = height
+                height = tmp
             }
 
-            retriever.release()
+            // 抽首帧
+            val frame = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                ?: retriever.frameAtTime
+
+            if (frame != null) {
+                val outFile = File(context.cacheDir, "video_frame_${UUID.randomUUID()}.jpg")
+                FileOutputStream(outFile).use { out ->
+                    frame.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                }
+                frameFile = outFile
+                if (width == 0 || height == 0) {
+                    width = frame.width
+                    height = frame.height
+                }
+            }
         } catch (e: Exception) {
-            // 忽略，使用 BitmapFactory 获取尺寸
-        }
-
-        // 如果 MediaMetadataRetriever 没有获取到尺寸，用 BitmapFactory
-        if (width == 0 || height == 0) {
-            try {
-                val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                context.contentResolver.openInputStream(uri)?.use { stream ->
-                    BitmapFactory.decodeStream(stream, null, options)
-                }
-                width = options.outWidth
-                height = options.outHeight
-            } catch (e: Exception) {
-                // 忽略
-            }
-        }
-
-        // 判断是否为实况照片
-        val isLivePhoto = duration > 0
-        if (isLivePhoto) {
-            videoUri = uri
+            // 抽取失败，下面兜底
+        } finally {
+            try { retriever.release() } catch (e: Exception) { }
         }
 
         return LivePhoto(
             id = UUID.randomUUID().toString(),
-            staticImageUri = uri,
-            videoUri = videoUri,
+            // 抽帧失败时退回原 uri（后续加载会失败，但至少不会在这里崩溃）
+            staticImageUri = frameFile?.let { Uri.fromFile(it) } ?: uri,
+            videoUri = uri,
             videoDuration = duration,
-            creationDate = creationDate,
+            creationDate = System.currentTimeMillis(),
             width = width,
             height = height,
             orientation = 0
@@ -87,13 +145,72 @@ object LivePhotoUtils {
     }
 
     /**
-     * 检查是否为实况照片
+     * 图片 → 读取尺寸与 EXIF 方向
+     */
+    private fun createFromImage(context: Context, uri: Uri): LivePhoto {
+        var width = 0
+        var height = 0
+        var orientation = 0
+
+        // 尺寸
+        try {
+            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, options)
+            }
+            width = options.outWidth
+            height = options.outHeight
+        } catch (e: Exception) {
+            // 忽略
+        }
+
+        // EXIF 方向
+        try {
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                val exif = ExifInterface(stream)
+                orientation = exif.getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL
+                )
+            }
+        } catch (e: Exception) {
+            orientation = ExifInterface.ORIENTATION_NORMAL
+        }
+
+        // EXIF 旋转 90/270 时宽高互换
+        if (orientation == ExifInterface.ORIENTATION_ROTATE_90 ||
+            orientation == ExifInterface.ORIENTATION_ROTATE_270 ||
+            orientation == ExifInterface.ORIENTATION_TRANSPOSE ||
+            orientation == ExifInterface.ORIENTATION_TRANSVERSE
+        ) {
+            val tmp = width
+            width = height
+            height = tmp
+        }
+
+        // 判断是否实况照片：图片本身没有视频轨道，这里按静态图处理
+        return LivePhoto(
+            id = UUID.randomUUID().toString(),
+            staticImageUri = uri,
+            videoUri = null,
+            videoDuration = 0L,
+            creationDate = System.currentTimeMillis(),
+            width = width,
+            height = height,
+            orientation = orientation
+        )
+    }
+
+    /**
+     * 检查是否为实况照片（带视频轨道）
      */
     fun isLivePhoto(context: Context, uri: Uri): Boolean {
         return try {
             val retriever = MediaMetadataRetriever()
             retriever.setDataSource(context, uri)
-            val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+            val duration = retriever.extractMetadata(
+                MediaMetadataRetriever.METADATA_KEY_DURATION
+            )?.toLongOrNull() ?: 0L
             retriever.release()
             duration > 0
         } catch (e: Exception) {
@@ -102,68 +219,51 @@ object LivePhotoUtils {
     }
 
     /**
-     * 从Uri中提取视频轨道（用于实况照片）
-     * 返回视频文件的Uri
+     * 按照 EXIF 方向旋转 Bitmap
      */
-    fun extractVideoTrack(context: Context, uri: Uri): File? {
-        var extractor: MediaExtractor? = null
-        var outputFile: File? = null
-        var outputStream: FileOutputStream? = null
+    fun applyExifOrientation(bitmap: Bitmap, orientation: Int): Bitmap {
+        val matrix = Matrix()
+        when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+            ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+            ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+            ExifInterface.ORIENTATION_TRANSPOSE -> {
+                matrix.postRotate(90f)
+                matrix.postScale(-1f, 1f)
+            }
+            ExifInterface.ORIENTATION_TRANSVERSE -> {
+                matrix.postRotate(270f)
+                matrix.postScale(-1f, 1f)
+            }
+            else -> return bitmap
+        }
 
         return try {
-            extractor = MediaExtractor()
-            extractor.setDataSource(context, uri, null)
-
-            var videoTrackIndex = -1
-            var videoFormat: MediaFormat? = null
-
-            for (i in 0 until extractor.trackCount) {
-                val format = extractor.getTrackFormat(i)
-                val mime = format.getString(MediaFormat.KEY_MIME)
-                if (mime?.startsWith("video/") == true) {
-                    videoTrackIndex = i
-                    videoFormat = format
-                    break
-                }
+            val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+            if (rotated != bitmap) {
+                bitmap.recycle()
             }
-
-            if (videoTrackIndex == -1 || videoFormat == null) {
-                return null
-            }
-
-            extractor.selectTrack(videoTrackIndex)
-
-            // 创建临时文件
-            outputFile = File.createTempFile("live_video_", ".mp4", context.cacheDir)
-            outputStream = FileOutputStream(outputFile)
-
-            // 读取并写入视频数据
-            val buffer = java.nio.ByteBuffer.allocate(1024 * 1024)
-            val bufferInfo = android.media.MediaCodec.BufferInfo()
-
-            while (true) {
-                val sampleSize = extractor.readSampleData(buffer, 0)
-                if (sampleSize < 0) break
-
-                bufferInfo.set(0, sampleSize, extractor.sampleTime, extractor.sampleFlags)
-                outputStream.write(buffer.array(), 0, sampleSize)
-                extractor.advance()
-            }
-
-            extractor.release()
-            extractor = null
-            outputStream.close()
-            outputStream = null
-
-            outputFile
+            rotated
         } catch (e: Exception) {
-            extractor?.release()
-            try { outputStream?.close() } catch (e2: Exception) {}
-            outputFile?.delete()
-            null
-        } finally {
-            try { extractor?.release() } catch (e: Exception) {}
-            try { outputStream?.close() } catch (e: Exception) {}
+            bitmap
+        }
+    }
+
+    /**
+     * 读取 EXIF 方向
+     */
+    fun readExifOrientation(context: Context, uri: Uri): Int {
+        return try {
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                ExifInterface(stream).getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL
+                )
+            } ?: ExifInterface.ORIENTATION_NORMAL
+        } catch (e: Exception) {
+            ExifInterface.ORIENTATION_NORMAL
         }
     }
 
@@ -194,7 +294,8 @@ object LivePhotoUtils {
             val halfWidth = width / 2
 
             while ((halfHeight / inSampleSize) >= reqHeight &&
-                   (halfWidth / inSampleSize) >= reqWidth) {
+                (halfWidth / inSampleSize) >= reqWidth
+            ) {
                 inSampleSize *= 2
             }
         }
