@@ -1,11 +1,15 @@
 package com.example.livephotostitch.ui.screens
 
+import android.Manifest
 import android.content.ContentValues
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,11 +26,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import com.example.livephotostitch.data.StitchProjectState
 import com.example.livephotostitch.engine.LivePhotoStitchEngine
 import com.example.livephotostitch.engine.MlKitPortraitCutoutProcessor
 import com.example.livephotostitch.engine.StitchResult
+import com.example.livephotostitch.utils.MotionPhotoWriter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -52,6 +58,55 @@ fun PreviewScreen(
     var isSaving by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var retryKey by remember { mutableStateOf(0) }
+    var saveRequested by remember { mutableStateOf(false) }
+
+    // Android 8/9 需要写外部存储权限；10+ 走 MediaStore 不需要
+    val storagePermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            saveRequested = true
+        } else {
+            errorMessage = "没有存储权限，无法保存到相册"
+        }
+    }
+
+    fun startSave() {
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
+            val granted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ) == PackageManager.PERMISSION_GRANTED
+
+            if (!granted) {
+                storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                return
+            }
+        }
+        saveRequested = true
+    }
+
+    // 真正的保存动作
+    LaunchedEffect(saveRequested) {
+        if (!saveRequested) return@LaunchedEffect
+        saveRequested = false
+
+        val current = result ?: return@LaunchedEffect
+
+        isSaving = true
+        try {
+            val saved = saveResult(context = context, result = current)
+            if (saved) {
+                isSaved = true
+            } else {
+                errorMessage = "保存失败，请重试"
+            }
+        } catch (e: Exception) {
+            errorMessage = e.message ?: "保存失败"
+        } finally {
+            isSaving = false
+        }
+    }
 
     // 进入页面自动开始处理，retryKey 变化时重新处理
     LaunchedEffect(retryKey) {
@@ -59,29 +114,34 @@ fun PreviewScreen(
         processingProgress = 0f
         isSaved = false
         errorMessage = null
+        stitchedBitmap = null
+        result = null
 
-        scope.launch {
-            try {
-                // 模拟进度
-                for (i in 1..10) {
-                    delay(200)
-                    processingProgress = i / 10f
-                }
-
-                val processResult = processStitch(context)
-
-                if (processResult != null) {
-                    result = processResult
-                    stitchedBitmap = loadBitmap(context, processResult.staticImageUri)
-                    isProcessing = false
-                } else {
-                    errorMessage = "处理失败，请重试"
-                    isProcessing = false
-                }
-            } catch (e: Exception) {
-                errorMessage = e.message ?: "处理失败"
-                isProcessing = false
+        // 进度条：处理期间缓慢推进到 90%，完成后再补到 100%（不做假等待）
+        val progressJob = launch {
+            var p = 0f
+            while (p < 0.9f) {
+                delay(150)
+                p = (p + 0.03f).coerceAtMost(0.9f)
+                processingProgress = p
             }
+        }
+
+        try {
+            val processResult = processStitch(context)
+
+            if (processResult != null) {
+                result = processResult
+                stitchedBitmap = loadBitmap(context, processResult.staticImageUri)
+                processingProgress = 1f
+            } else {
+                errorMessage = "处理失败，请重试"
+            }
+        } catch (e: Exception) {
+            errorMessage = e.message ?: "处理失败"
+        } finally {
+            progressJob.cancel()
+            isProcessing = false
         }
     }
 
@@ -197,23 +257,7 @@ fun PreviewScreen(
                 TextButton(
                     onClick = {
                         showSaveDialog = false
-                        isSaving = true
-
-                        scope.launch {
-                            try {
-                                val saved = saveResult(
-                                    context = context,
-                                    result = result!!
-                                )
-                                if (saved) {
-                                    isSaved = true
-                                } else {
-                                    errorMessage = "保存失败，请重试"
-                                }
-                            } finally {
-                                isSaving = false
-                            }
-                        }
+                        startSave()
                     }
                 ) {
                     Text("保存")
@@ -410,66 +454,90 @@ private fun loadBitmap(context: Context, uri: Uri): android.graphics.Bitmap? {
 
 /**
  * 保存结果到相册
+ *
+ * 有视频时写成真正的 Motion Photo（JPEG + 内嵌 MP4 + XMP），
+ * 这样系统相册会把它识别成「实况照片」并播放动态效果；
+ * 而不是把 JPG 和 MP4 拆成两个文件（那样相册里只是张静态图）。
  */
 private suspend fun saveResult(
     context: Context,
     result: StitchResult
 ): Boolean = withContext(Dispatchers.IO) {
     try {
-        // 保存静态图
-        saveImageToGallery(context, result.staticImageUri)
+        val jpegBytes = context.contentResolver.openInputStream(result.staticImageUri)
+            ?.use { it.readBytes() }
+            ?: return@withContext false
 
-        // 保存视频（实况照片的动态部分）
-        result.videoUri?.let { videoUri ->
-            saveVideoToGallery(context, videoUri)
+        val mp4Bytes = result.videoUri?.let { videoUri ->
+            context.contentResolver.openInputStream(videoUri)?.use { it.readBytes() }
         }
 
-        true
+        var savedAsMotionPhoto = false
+
+        if (mp4Bytes != null && mp4Bytes.isNotEmpty()) {
+            val merged = MotionPhotoWriter.createMotionPhoto(jpegBytes, mp4Bytes)
+            if (merged != null) {
+                savedAsMotionPhoto = saveBytesToGallery(
+                    context = context,
+                    fileName = "LivePhoto_${System.currentTimeMillis()}.jpg",
+                    bytes = merged
+                )
+            }
+        }
+
+        if (savedAsMotionPhoto) {
+            return@withContext true
+        }
+
+        // 没有视频，或合成失败 → 至少把静态图存进去，并如实返回结果
+        saveBytesToGallery(
+            context = context,
+            fileName = "LivePhoto_${System.currentTimeMillis()}.jpg",
+            bytes = jpegBytes
+        )
     } catch (e: Exception) {
         false
     }
 }
 
 /**
- * 保存图片到相册
+ * 把字节写入系统相册（Images）
  */
-private fun saveImageToGallery(context: Context, imageUri: Uri) {
+private fun saveBytesToGallery(context: Context, fileName: String, bytes: ByteArray): Boolean {
     val values = ContentValues().apply {
-        put(MediaStore.Images.Media.DISPLAY_NAME, "LivePhoto_${System.currentTimeMillis()}.jpg")
+        put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
         put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/LivePhotoStitch")
+            put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/Camera")
+            put(MediaStore.Images.Media.IS_PENDING, 1)
         }
     }
 
-    val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-    uri?.let {
-        context.contentResolver.openOutputStream(it)?.use { output ->
-            context.contentResolver.openInputStream(imageUri)?.use { input ->
-                input.copyTo(output)
-            }
-        }
-    }
-}
+    val uri = try {
+        context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+    } catch (e: Exception) {
+        null
+    } ?: return false
 
-/**
- * 保存视频到相册
- */
-private fun saveVideoToGallery(context: Context, videoUri: Uri) {
-    val values = ContentValues().apply {
-        put(MediaStore.Video.Media.DISPLAY_NAME, "LivePhoto_${System.currentTimeMillis()}.mp4")
-        put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+    return try {
+        context.contentResolver.openOutputStream(uri)?.use { output ->
+            output.write(bytes)
+            output.flush()
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/LivePhotoStitch")
-        }
-    }
-
-    val uri = context.contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
-    uri?.let {
-        context.contentResolver.openOutputStream(it)?.use { output ->
-            context.contentResolver.openInputStream(videoUri)?.use { input ->
-                input.copyTo(output)
+            val done = ContentValues().apply {
+                put(MediaStore.Images.Media.IS_PENDING, 0)
             }
+            context.contentResolver.update(uri, done, null, null)
         }
+        true
+    } catch (e: Exception) {
+        try {
+            context.contentResolver.delete(uri, null, null)
+        } catch (e2: Exception) {
+            // 忽略
+        }
+        false
     }
 }
