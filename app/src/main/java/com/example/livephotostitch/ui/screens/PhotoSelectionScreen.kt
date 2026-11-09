@@ -118,7 +118,7 @@ fun PhotoSelectionScreen(
                             if (photo == null) {
                                 currentSlotIndex = index
                                 pickMedia.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
                                 )
                             } else {
                                 currentSlotIndex = index

@@ -55,12 +55,6 @@ fun EditScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { /* 撤销 */ }) {
-                        Icon(Icons.Default.Undo, contentDescription = "撤销")
-                    }
-                    IconButton(onClick = { /* 重做 */ }) {
-                        Icon(Icons.Default.Redo, contentDescription = "重做")
-                    }
                     TextButton(onClick = onNextClick) {
                         Text("预览")
                     }
@@ -121,7 +115,7 @@ fun EditScreen(
             } else if (selectedTool == EditTool.CUTOUT && selectedPhotoIndex == null) {
                 // 提示用户先选择照片
                 TipCard(
-                    text = "请先点击选择一张照片，再使用抠图功能",
+                    text = "请先点击选择一张照片，再使用 AI 突出功能",
                     modifier = Modifier
                         .align(Alignment.Center)
                         .padding(16.dp)
@@ -142,6 +136,7 @@ fun EditScreen(
 
 /**
  * 拼接预览区域 —— 显示真实照片
+ * 使用 BoxWithConstraints 来正确计算百分比布局
  */
 @Composable
 private fun StitchPreviewArea(
@@ -152,10 +147,14 @@ private fun StitchPreviewArea(
     onPhotoSelected: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Box(
+    BoxWithConstraints(
         modifier = modifier,
         contentAlignment = Alignment.Center
     ) {
+        val density = androidx.compose.ui.platform.LocalDensity.current
+        val containerWidthPx = constraints.maxWidth.toFloat()
+        val containerHeightPx = constraints.maxHeight.toFloat()
+
         if (photos.isEmpty() || template == null) {
             // 没有照片时显示占位
             Box(
@@ -185,13 +184,21 @@ private fun StitchPreviewArea(
                         val isSelected = selectedPhotoIndex == index
                         val effect = effects.getOrNull(index) ?: PhotoEffect()
 
+                        // 计算实际像素位置和大小，然后转换为 dp
+                        val cellWidthDp = with(density) { (item.width * containerWidthPx).toDp() }
+                        val cellHeightDp = with(density) { (item.height * containerHeightPx).toDp() }
+                        val cellXDp = with(density) { (item.x * containerWidthPx).toDp() }
+                        val cellYDp = with(density) { (item.y * containerHeightPx).toDp() }
+
                         Box(
                             modifier = Modifier
-                                .fillMaxWidth(item.width)
-                                .fillMaxHeight(item.height)
                                 .absoluteOffset(
-                                    x = (item.x * 100).dp,
-                                    y = (item.y * 100).dp
+                                    x = cellXDp,
+                                    y = cellYDp
+                                )
+                                .size(
+                                    width = cellWidthDp,
+                                    height = cellHeightDp
                                 )
                                 .border(
                                     width = if (isSelected) 3.dp else 0.dp,
@@ -413,10 +420,7 @@ private fun ToolPanel(
             }
 
             EditTool.FILTER -> {
-                FilterPanel(
-                    effect = currentEffect,
-                    onEffectChange = onEffectChange
-                )
+                FilterPanel()
             }
 
             EditTool.ROTATE -> {
@@ -468,7 +472,7 @@ private fun ZoomPanel(
 }
 
 /**
- * 抠图面板 —— AI 人物抠图 + 放大
+ * AI 人物突出面板
  */
 @Composable
 private fun CutoutPanel(
@@ -573,10 +577,7 @@ private fun CutoutPanel(
  * 滤镜面板
  */
 @Composable
-private fun FilterPanel(
-    effect: PhotoEffect,
-    onEffectChange: (PhotoEffect) -> Unit
-) {
+private fun FilterPanel() {
     Column(modifier = Modifier.padding(16.dp)) {
         Text(
             text = "滤镜",
@@ -649,12 +650,12 @@ private fun XiaomiFeatureHint(modifier: Modifier = Modifier) {
             Spacer(modifier = Modifier.width(8.dp))
             Column {
                 Text(
-                    text = "小米AI抠图已启用",
+                    text = "AI 人物突出",
                     fontWeight = FontWeight.Bold,
                     fontSize = 14.sp
                 )
                 Text(
-                    text = "使用小米相机AI引擎，抠图更精准",
+                    text = "使用 ML Kit 人像分割，人物可超出边框",
                     fontSize = 12.sp,
                     color = Color.Gray
                 )
