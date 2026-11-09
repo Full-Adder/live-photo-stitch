@@ -40,7 +40,14 @@ fun PhotoSelectionScreen(
     onBackClick: () -> Unit
 ) {
     val context = LocalContext.current
-    var selectedPhotos by remember { mutableStateOf<List<LivePhoto?>>(listOf(null, null, null)) }
+    // 从全局状态初始化，支持返回时保留选择
+    var selectedPhotos by remember {
+        mutableStateOf(
+            List(3) { index ->
+                StitchProjectState.photos.getOrNull(index)
+            }
+        )
+    }
     var currentSlotIndex by remember { mutableIntStateOf(0) }
     
     val pickMedia = rememberLauncherForActivityResult(
