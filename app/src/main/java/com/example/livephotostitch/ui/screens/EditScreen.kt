@@ -14,6 +14,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -119,10 +120,10 @@ fun EditScreen(
                         .align(Alignment.BottomCenter)
                         .padding(bottom = 72.dp)
                 )
-            } else if (selectedTool == EditTool.CUTOUT && selectedPhotoIndex == null) {
-                // 提示用户先选择照片
+            } else if (selectedTool != null && selectedPhotoIndex == null) {
+                // 任何工具都需要先选中一张照片
                 TipCard(
-                    text = "请先点击选择一张照片，再使用 AI 突出功能",
+                    text = "请先点击选择一张照片，再使用「${selectedTool!!.displayName}」",
                     modifier = Modifier
                         .align(Alignment.Center)
                         .padding(16.dp)
@@ -130,11 +131,11 @@ fun EditScreen(
             }
 
             // 小米专属提示
-            if (isXiaomi && selectedTool == EditTool.CUTOUT) {
+            if (isXiaomi && selectedTool == EditTool.CUTOUT && selectedPhotoIndex != null) {
                 XiaomiFeatureHint(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
-                        .padding(top = if (selectedPhotoIndex != null) 64.dp else 16.dp)
+                        .padding(top = 64.dp)
                 )
             }
         }
@@ -207,6 +208,7 @@ private fun StitchPreviewArea(
                                     width = cellWidthDp,
                                     height = cellHeightDp
                                 )
+                                .clip(RoundedCornerShape(4.dp))
                                 .border(
                                     width = if (isSelected) 3.dp else 0.dp,
                                     color = if (isSelected)
@@ -220,7 +222,15 @@ private fun StitchPreviewArea(
                             AsyncImage(
                                 model = photos[index].staticImageUri,
                                 contentDescription = "照片 ${index + 1}",
-                                modifier = Modifier.fillMaxSize(),
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .graphicsLayer {
+                                        // 与引擎一致的取景预览：先缩放，再按偏移平移
+                                        scaleX = effect.backgroundZoom
+                                        scaleY = effect.backgroundZoom
+                                        translationX = -effect.cropOffsetX * size.width * 0.25f
+                                        translationY = -effect.cropOffsetY * size.height * 0.25f
+                                    },
                                 contentScale = ContentScale.Crop
                             )
 
@@ -412,10 +422,10 @@ private fun ToolPanel(
         )
     ) {
         when (tool) {
-            EditTool.ZOOM -> {
-                ZoomPanel(
-                    zoomLevel = currentEffect.zoomLevel,
-                    onZoomLevelChange = { onEffectChange(currentEffect.copy(zoomLevel = it)) }
+            EditTool.CROP -> {
+                CropPanel(
+                    effect = currentEffect,
+                    onEffectChange = onEffectChange
                 )
             }
 
@@ -438,43 +448,74 @@ private fun ToolPanel(
 }
 
 /**
- * 缩放面板
+ * 裁剪面板 —— 每张照片单独的取景范围
  */
 @Composable
-private fun ZoomPanel(
-    zoomLevel: Float,
-    onZoomLevelChange: (Float) -> Unit
+private fun CropPanel(
+    effect: PhotoEffect,
+    onEffectChange: (PhotoEffect) -> Unit
 ) {
     Column(modifier = Modifier.padding(16.dp)) {
         Text(
-            text = "缩放",
+            text = "裁剪 / 缩放",
             fontWeight = FontWeight.Bold,
             fontSize = 16.sp
         )
 
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Icon(Icons.Default.ZoomOut, contentDescription = "缩小")
-            Slider(
-                value = zoomLevel,
-                onValueChange = onZoomLevelChange,
-                valueRange = 0.5f..2.0f,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 8.dp)
-            )
-            Icon(Icons.Default.ZoomIn, contentDescription = "放大")
-        }
+        Spacer(modifier = Modifier.height(4.dp))
 
         Text(
-            text = "${(zoomLevel * 100).toInt()}%",
-            fontSize = 14.sp,
+            text = "调整这张照片在格子里的取景范围",
+            fontSize = 12.sp,
             color = Color.Gray
         )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // 画面缩放
+        Text(
+            text = "缩放: ${(effect.backgroundZoom * 100).toInt()}%",
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium
+        )
+
+        Slider(
+            value = effect.backgroundZoom,
+            onValueChange = { onEffectChange(effect.copy(backgroundZoom = it)) },
+            valueRange = 1f..2f,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // 水平位置
+        Text(text = "左右位置", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        Slider(
+            value = effect.cropOffsetX,
+            onValueChange = { onEffectChange(effect.copy(cropOffsetX = it)) },
+            valueRange = -1f..1f,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        // 垂直位置
+        Text(text = "上下位置", fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        Slider(
+            value = effect.cropOffsetY,
+            onValueChange = { onEffectChange(effect.copy(cropOffsetY = it)) },
+            valueRange = -1f..1f,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        // 重置
+        TextButton(
+            onClick = {
+                onEffectChange(
+                    effect.copy(cropOffsetX = 0f, cropOffsetY = 0f, backgroundZoom = 1f)
+                )
+            }
+        ) {
+            Text("重置裁剪")
+        }
     }
 }
 
@@ -512,7 +553,14 @@ private fun CutoutPanel(
             Switch(
                 checked = effect.cutoutEnabled,
                 onCheckedChange = { enabled ->
-                    onEffectChange(effect.copy(cutoutEnabled = enabled))
+                    onEffectChange(
+                        effect.copy(
+                            cutoutEnabled = enabled,
+                            // 打开时给一个默认放大倍数，否则引擎会认为"没设置"而跳过
+                            zoomLevel = if (enabled && effect.zoomLevel <= 1.0f) 1.4f
+                            else effect.zoomLevel
+                        )
+                    )
                 }
             )
         }
@@ -672,7 +720,7 @@ private fun XiaomiFeatureHint(modifier: Modifier = Modifier) {
 }
 
 enum class EditTool(val displayName: String, val icon: ImageVector) {
-    ZOOM("缩放", Icons.Default.ZoomIn),
+    CROP("裁剪", Icons.Default.Crop),
     CUTOUT("AI突出", Icons.Default.ContentCut),
     FILTER("滤镜", Icons.Default.Filter),
     ROTATE("旋转", Icons.Default.RotateRight)
