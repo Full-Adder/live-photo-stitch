@@ -147,14 +147,10 @@ private fun StitchPreviewArea(
     onPhotoSelected: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    BoxWithConstraints(
+    Box(
         modifier = modifier,
         contentAlignment = Alignment.Center
     ) {
-        val density = androidx.compose.ui.platform.LocalDensity.current
-        val containerWidthPx = constraints.maxWidth.toFloat()
-        val containerHeightPx = constraints.maxHeight.toFloat()
-
         if (photos.isEmpty() || template == null) {
             // 没有照片时显示占位
             Box(
@@ -170,7 +166,7 @@ private fun StitchPreviewArea(
             }
         } else {
             // 显示真实照片的拼接预览
-            Box(
+            BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(template.aspectRatio)
@@ -178,6 +174,10 @@ private fun StitchPreviewArea(
                     .clip(RoundedCornerShape(16.dp))
                     .background(Color.Black)
             ) {
+                val density = androidx.compose.ui.platform.LocalDensity.current
+                val boxWidthPx = constraints.maxWidth.toFloat()
+                val boxHeightPx = constraints.maxHeight.toFloat()
+
                 // 按照模板布局显示每张照片
                 template.layout.forEachIndexed { index, item ->
                     if (index < photos.size) {
@@ -185,10 +185,10 @@ private fun StitchPreviewArea(
                         val effect = effects.getOrNull(index) ?: PhotoEffect()
 
                         // 计算实际像素位置和大小，然后转换为 dp
-                        val cellWidthDp = with(density) { (item.width * containerWidthPx).toDp() }
-                        val cellHeightDp = with(density) { (item.height * containerHeightPx).toDp() }
-                        val cellXDp = with(density) { (item.x * containerWidthPx).toDp() }
-                        val cellYDp = with(density) { (item.y * containerHeightPx).toDp() }
+                        val cellWidthDp = with(density) { (item.width * boxWidthPx).toDp() }
+                        val cellHeightDp = with(density) { (item.height * boxHeightPx).toDp() }
+                        val cellXDp = with(density) { (item.x * boxWidthPx).toDp() }
+                        val cellYDp = with(density) { (item.y * boxHeightPx).toDp() }
 
                         Box(
                             modifier = Modifier

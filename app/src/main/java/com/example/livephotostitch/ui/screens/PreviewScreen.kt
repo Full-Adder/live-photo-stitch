@@ -96,6 +96,9 @@ fun PreviewScreen(
                     IconButton(onClick = { showSaveDialog = true }) {
                         Icon(Icons.Default.Save, contentDescription = "保存")
                     }
+                    IconButton(onClick = onDoneClick) {
+                        Icon(Icons.Default.Check, contentDescription = "完成")
+                    }
                 }
             )
         },

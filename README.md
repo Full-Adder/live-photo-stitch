@@ -1,226 +1,97 @@
-# 实况照片拼接 APP
+# 实况照片拼接 (Live Photo Stitch)
 
-一款专为安卓设计、特别优化小米手机的实况照片拼接应用。
+一款专为安卓手机（特别是小米手机）设计的实况照片拼接应用。
 
-## ✨ 主要功能
+## ✨ 功能特点
 
-### 📸 实况照片拼接
-- 支持3张照片拼接
-- 提供6种以上精美模板
-- 保持实况照片效果
-- 高清输出质量
+### 🎨 智能拼接
+- **固定输出比例**：由模板决定，确保输出尺寸一致
+- **紧凑布局**：照片边缘紧贴，无间距，自动裁剪填充
+- **6 种模板**：
+  - 横向三格 (16:9)
+  - 纵向三格 (9:16)
+  - 中间大两边小 (16:9)
+  - 左大右小 (16:9)
+  - 右大左小 (16:9)
+  - 四宫格 (4:3)
 
-### 🤖 智能抠图
-- AI自动识别人物
-- 小米手机专属AI引擎
-- 精准边缘处理
-- 支持手动调整
+### ✨ AI 人物突出
+- **可选功能**：对任意一张照片启用
+- **自动识别**：使用 ML Kit 人像分割
+- **超出边框**：人物可放大并超出格子边界，覆盖到相邻照片
+- **背景不变**：保持原有背景，不超过原有图片大小
+- **参数调节**：
+  - 放大倍数 (100%-300%)
+  - 人物位置（水平/垂直）
 
-### 🎨 背景处理
-- 人物放大，背景保持
-- 整体放大智能裁剪
-- 背景虚化效果
-- 多种滤镜选择
+### 🎬 实况照片
+- **输出完整实况照片**：静态图 + 短视频
+- **视频内容**：包含所有照片的拼接画面
+- **保存到相册**：自动保存到系统相册
 
-### 🌟 小米手机专属优化
-- GPU Turbo加速
-- 小米AI引擎调用
-- 系统级性能优化
-- 专属UI提示
+## 📱 使用步骤
 
-## 🚀 快速开始
+1. **选择照片**
+   - 点击"开始创作"
+   - 选择 3 张照片（支持实况照片和普通照片）
+   - 点击"下一步"
 
-### 环境要求
-- Android Studio Hedgehog (2023.1.1) 或更高版本
-- JDK 8 或更高版本
-- Android SDK 26+
-- Gradle 8.0+
+2. **选择模板**
+   - 浏览 6 种模板布局
+   - 选择喜欢的模板
+   - 点击"下一步"
 
-### 安装步骤
+3. **编辑照片**（可选）
+   - 点击预览中的照片进行选择
+   - 选择底部工具：
+     - **缩放**：调整照片大小
+     - **AI突出**：启用人物抠图+放大
+     - **滤镜**：应用滤镜效果
+     - **旋转**：旋转照片
+   - 点击"预览"
 
-1. **克隆项目**
-```bash
-git clone <repository-url>
-cd 实况照片拼接app
-```
+4. **预览与保存**
+   - 查看拼接效果
+   - 确认包含动态效果（实况照片）
+   - 点击"保存"保存到相册
 
-2. **打开项目**
-```bash
-# 使用Android Studio打开项目
-# 或者使用命令行
-./gradlew build
-```
+## 📦 下载
 
-3. **运行应用**
-```bash
-# 连接Android设备或启动模拟器
-./gradlew installDebug
-```
+### v1.2 (最新)
+- [LivePhotoStitch-v1.2.apk](https://github.com/Full-Adder/live-photo-stitch/releases/download/v1.2/LivePhotoStitch-v1.2.apk)
 
-### 权限配置
-应用需要以下权限：
-- 📷 相机权限（用于拍照）
-- 🖼️ 存储权限（用于读取照片）
-- 🎥 视频权限（用于处理实况照片）
+### v1.1
+- [LivePhotoStitch-v1.1.apk](https://github.com/Full-Adder/live-photo-stitch/releases/download/v1.1/LivePhotoStitch-v1.1.apk)
 
-## 📱 使用说明
+## 🔧 安装说明
 
-### 1. 选择照片
-- 点击"开始创作"进入首页
-- 点击照片槽位选择3张照片
-- 支持实况照片和普通照片
+1. 下载 APK 文件
+2. 在手机上允许"安装未知来源应用"
+3. 安装应用
+4. 首次使用请授予存储权限
 
-### 2. 选择模板
-- 浏览6种拼接模板
-- 点击模板预览效果
-- 选择喜欢的模板
+## 🛠️ 技术栈
 
-### 3. 编辑照片
-- **缩放**: 调整照片大小
-- **抠图**: 自动识别人物
-- **滤镜**: 添加特效
-- **旋转**: 调整角度
+- **Kotlin** + **Jetpack Compose**
+- **Material Design 3**
+- **ML Kit** 人像分割
+- **MediaCodec/MediaMuxer** 视频处理
+- **Coil** 图片加载
+- **Hilt** 依赖注入
 
-### 4. 保存分享
-- 预览最终效果
-- 选择保存格式
-- 分享到社交平台
+## 📋 系统要求
 
-## 🛠️ 技术架构
+- Android 8.0 (API 26) 或更高版本
+- 建议 Android 10+ 以获得最佳体验
+- 小米/Redmi/POCO 手机均可使用
 
-### 技术栈
-```
-- Kotlin
-- Jetpack Compose
-- MVVM架构
-- OpenCV
-- ML Kit
-- MediaCodec
-- Hilt DI
-- Coroutines
-```
+## ⚠️ 注意事项
 
-### 项目结构
-```
-app/
-├── data/           # 数据层
-├── engine/         # 核心引擎
-├── ui/             # UI层
-├── utils/          # 工具类
-└── MainActivity.kt # 主活动
-```
-
-## 📋 开发指南
-
-### 添加新模板
-在 `TemplateSelectionScreen.kt` 中添加新模板：
-```kotlin
-StitchTemplate(
-    id = "new_template",
-    name = "新模板",
-    layout = listOf(
-        TemplateItem(0.05f, 0.25f, 0.28f, 0.5f),
-        // ... 其他位置
-    ),
-    aspectRatio = 16f / 9f,
-    thumbnailResId = 0
-)
-```
-
-### 添加新滤镜
-在 `BackgroundProcessor.kt` 中实现：
-```kotlin
-fun applyNewFilter(bitmap: Bitmap): Bitmap {
-    // 实现滤镜逻辑
-    return processedBitmap
-}
-```
-
-### 集成小米功能
-在 `XiaomiIntegration.kt` 中调用：
-```kotlin
-XiaomiIntegration.callXiaomiPortraitCutout(context, imageUri) { result ->
-    // 处理结果
-}
-```
-
-## 🧪 测试
-
-### 运行测试
-```bash
-# 单元测试
-./gradlew test
-
-# UI测试
-./gradlew connectedAndroidTest
-
-# 代码覆盖率
-./gradlew jacocoTestReport
-```
-
-### 测试设备
-- 小米13 Pro
-- 小米12
-- Redmi K60
-- 其他Android 8.0+设备
-
-## 📦 发布
-
-### 构建APK
-```bash
-# 调试版本
-./gradlew assembleDebug
-
-# 发布版本
-./gradlew assembleRelease
-```
-
-### 签名配置
-在 `app/build.gradle.kts` 中配置签名：
-```kotlin
-signingConfigs {
-    create("release") {
-        storeFile = file("keystore.jks")
-        storePassword = "your_password"
-        keyAlias = "your_alias"
-        keyPassword = "your_password"
-    }
-}
-```
-
-## 🤝 贡献
-
-欢迎贡献代码！请遵循以下步骤：
-
-1. Fork 项目
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
-4. 推送分支 (`git push origin feature/AmazingFeature`)
-5. 开启 Pull Request
+- 处理过程需要一定时间，请耐心等待
+- AI 人物突出功能需要联网下载模型
+- 输出照片分辨率为 1080px 宽度
+- 视频时长取决于原照片的视频时长
 
 ## 📄 许可证
 
-本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件
-
-## 📞 联系方式
-
-- 项目维护者: [Your Name]
-- 邮箱: [your.email@example.com]
-- 项目地址: [https://github.com/yourusername/live-photo-stitch](https://github.com/yourusername/live-photo-stitch)
-
-## 🙏 致谢
-
-- [Jetpack Compose](https://developer.android.com/jetpack/compose)
-- [OpenCV](https://opencv.org/)
-- [ML Kit](https://developers.google.com/ml-kit)
-- [小米开放平台](https://dev.mi.com/)
-
-## 📊 项目状态
-
-![Build Status](https://img.shields.io/badge/build-passing-brightgreen)
-![Version](https://img.shields.io/badge/version-1.0.0-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
-
----
-
-**注意**: 本项目仍在积极开发中，欢迎反馈和建议！
+本项目仅供学习交流使用。
