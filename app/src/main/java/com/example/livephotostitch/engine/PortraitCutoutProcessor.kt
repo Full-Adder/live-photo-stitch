@@ -143,8 +143,20 @@ class MlKitPortraitCutoutProcessor(private val context: Context) : PortraitCutou
 
     private fun ByteBuffer.toBitmap(width: Int, height: Int): Bitmap {
         this.rewind()
+        // ML Kit 返回的是 FLOAT 格式的 mask（每个像素一个 float，0-1）
+        // 需要转换为灰度 Bitmap 用于 PorterDuff 遮罩
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        bitmap.copyPixelsFromBuffer(this)
+        val floatBuffer = this.asFloatBuffer()
+        val pixels = IntArray(width * height)
+
+        for (i in 0 until width * height) {
+            val value = floatBuffer.get(i)
+            val alpha = (value.coerceIn(0f, 1f) * 255).toInt()
+            // 白色 + 透明度表示 mask
+            pixels[i] = (alpha shl 24) or 0x00FFFFFF
+        }
+
+        bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
         return bitmap
     }
 }
