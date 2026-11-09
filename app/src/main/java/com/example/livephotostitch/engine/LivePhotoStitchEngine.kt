@@ -330,7 +330,6 @@ class LivePhotoStitchEngine(private val context: Context) {
 
         // 对每一帧：使用静态背景 + 动态前景
         val firstVideoIndex = photos.indexOf(firstVideoPhoto)
-        val background = composeBackground(bitmaps, template, outputWidth, outputHeight)
 
         val processedFrames = frames.map { frame ->
             // 如果当前帧来自有视频的照片，替换该位置的静态图
@@ -360,6 +359,7 @@ class LivePhotoStitchEngine(private val context: Context) {
 
     /**
      * 将帧序列编码为 MP4 视频
+     * 使用 MediaCodec + MediaMuxer 编码
      */
     private fun encodeFramesToVideo(frames: List<Bitmap>, outputFile: File) {
         if (frames.isEmpty()) return
@@ -372,60 +372,148 @@ class LivePhotoStitchEngine(private val context: Context) {
         val encWidth = if (width % 2 == 0) width else width - 1
         val encHeight = if (height % 2 == 0) height else height - 1
 
+        var codec: MediaCodec? = null
+        var muxer: MediaMuxer? = null
+
         try {
-            val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            // 创建编码器 — 使用 ByteBuffer 输入方式
+            codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
 
             val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, encWidth, encHeight).apply {
-                setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+                setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
                 setInteger(MediaFormat.KEY_BIT_RATE, 4_000_000)
                 setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
                 setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
             }
 
-            val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
             codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            val surface = codec.createInputSurface()
             codec.start()
 
-            val videoTrackIndex = muxer.addTrack(format)
-            muxer.start()
+            muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
 
             val bufferInfo = MediaCodec.BufferInfo()
+            var muxerStarted = false
+            var trackIndex = -1
+
+            // 将每帧转换为 YUV420SP (NV12) 并输入编码器
+            val frameDurationUs = 1_000_000L / frameRate
+            var frameIndex = 0
 
             frames.forEach { frame ->
-                val canvas = surface.lockCanvas(null)
                 // 缩放帧到编码尺寸
-                if (frame.width != encWidth || frame.height != encHeight) {
-                    val scaled = Bitmap.createScaledBitmap(frame, encWidth, encHeight, true)
-                    canvas.drawBitmap(scaled, 0f, 0f, null)
+                val scaled = if (frame.width != encWidth || frame.height != encHeight) {
+                    Bitmap.createScaledBitmap(frame, encWidth, encHeight, true)
                 } else {
-                    canvas.drawBitmap(frame, 0f, 0f, null)
+                    frame
                 }
-                surface.unlockCanvasAndPost(canvas)
 
+                // 转换为 NV12 (YUV420SP)
+                val nv12 = bitmapToNV12(scaled, encWidth, encHeight)
+
+                // 输入到编码器
+                val inputBufferId = codec.dequeueInputBuffer(10_000)
+                if (inputBufferId >= 0) {
+                    val inputBuffer = codec.getInputBuffer(inputBufferId)
+                    inputBuffer?.clear()
+                    inputBuffer?.put(nv12)
+                    val ptsUs = frameIndex * frameDurationUs
+                    codec.queueInputBuffer(inputBufferId, 0, nv12.size, ptsUs, 0)
+                }
+                frameIndex++
+
+                // 输出编码数据
                 var outputBufferId = codec.dequeueOutputBuffer(bufferInfo, 10_000)
-                while (outputBufferId >= 0) {
-                    val encodedData = codec.getOutputBuffer(outputBufferId)
-                    if (encodedData != null && bufferInfo.size > 0) {
-                        muxer.writeSampleData(videoTrackIndex, encodedData, bufferInfo)
+                while (outputBufferId != MediaCodec.INFO_TRY_AGAIN_LATER) {
+                    if (outputBufferId == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                        trackIndex = muxer.addTrack(codec.outputFormat)
+                        muxer.start()
+                        muxerStarted = true
+                    } else if (outputBufferId >= 0) {
+                        val encodedData = codec.getOutputBuffer(outputBufferId)
+                        if (encodedData != null && bufferInfo.size > 0 && muxerStarted) {
+                            encodedData.position(bufferInfo.offset)
+                            encodedData.limit(bufferInfo.offset + bufferInfo.size)
+                            muxer.writeSampleData(trackIndex, encodedData, bufferInfo)
+                        }
+                        codec.releaseOutputBuffer(outputBufferId, false)
                     }
-                    codec.releaseOutputBuffer(outputBufferId, false)
                     outputBufferId = codec.dequeueOutputBuffer(bufferInfo, 10_000)
                 }
             }
 
-            codec.signalEndOfInputStream()
-            codec.dequeueOutputBuffer(bufferInfo, 10_000)
+            // 发送 EOS
+            val inputBufferId = codec.dequeueInputBuffer(10_000)
+            if (inputBufferId >= 0) {
+                val eosPtsUs = frameIndex * frameDurationUs
+                codec.queueInputBuffer(inputBufferId, 0, 0, eosPtsUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+            }
+
+            // 读取剩余输出
+            var outputBufferId = codec.dequeueOutputBuffer(bufferInfo, 10_000)
+            while (outputBufferId != MediaCodec.INFO_TRY_AGAIN_LATER) {
+                if (outputBufferId >= 0 && bufferInfo.size > 0 && muxerStarted) {
+                    val encodedData = codec.getOutputBuffer(outputBufferId)
+                    if (encodedData != null) {
+                        encodedData.position(bufferInfo.offset)
+                        encodedData.limit(bufferInfo.offset + bufferInfo.size)
+                        muxer.writeSampleData(trackIndex, encodedData, bufferInfo)
+                    }
+                    codec.releaseOutputBuffer(outputBufferId, false)
+                }
+                outputBufferId = codec.dequeueOutputBuffer(bufferInfo, 10_000)
+            }
 
             codec.stop()
-            codec.release()
             muxer.stop()
-            muxer.release()
 
         } catch (e: Exception) {
             // 降级：保存第一帧为图片
-            frames.firstOrNull()?.let { saveBitmap(it, outputFile) }
+            try {
+                frames.firstOrNull()?.let { saveBitmap(it, outputFile) }
+            } catch (e2: Exception) {
+                // 忽略
+            }
+        } finally {
+            try { codec?.release() } catch (e: Exception) {}
+            try { muxer?.release() } catch (e: Exception) {}
         }
+    }
+
+    /**
+     * 将 Bitmap 转换为 NV12 (YUV420SP) 格式
+     */
+    private fun bitmapToNV12(bitmap: Bitmap, width: Int, height: Int): ByteArray {
+        val argb = IntArray(width * height)
+        bitmap.getPixels(argb, 0, width, 0, 0, width, height)
+
+        val yuv = ByteArray(width * height * 3 / 2)
+
+        // 转换 ARGB -> YUV
+        var yIndex = 0
+        var uvIndex = width * height
+
+        for (j in 0 until height) {
+            for (i in 0 until width) {
+                val pixel = argb[j * width + i]
+                val r = (pixel shr 16) and 0xFF
+                val g = (pixel shr 8) and 0xFF
+                val b = pixel and 0xFF
+
+                // Y
+                val y = ((66 * r + 129 * g + 25 * b + 128) shr 8) + 16
+                yuv[yIndex++] = y.coerceIn(0, 255).toByte()
+
+                // UV (每 2x2 采样一次)
+                if (j % 2 == 0 && i % 2 == 0) {
+                    val u = ((-38 * r - 74 * g + 112 * b + 128) shr 8) + 128
+                    val v = ((112 * r - 94 * g - 18 * b + 128) shr 8) + 128
+                    yuv[uvIndex++] = u.coerceIn(0, 255).toByte()
+                    yuv[uvIndex++] = v.coerceIn(0, 255).toByte()
+                }
+            }
+        }
+
+        return yuv
     }
 
     /**
