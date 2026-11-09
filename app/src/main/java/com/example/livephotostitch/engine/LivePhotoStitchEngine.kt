@@ -226,7 +226,6 @@ class LivePhotoStitchEngine(private val context: Context) {
         val videoPhotos = photos.mapIndexedNotNull { index, photo ->
             photo.videoUri?.let { index to it }
         }
-        if (videoPhotos.isEmpty()) return null
 
         val outputFile = File(outputDir, "video_${UUID.randomUUID()}.mp4")
 
@@ -234,21 +233,28 @@ class LivePhotoStitchEngine(private val context: Context) {
         val needsEffect = effects.any { it.cutoutEnabled && it.zoomLevel > 1.0f }
 
         return try {
-            if (!needsEffect) {
-                // 不需要效果：直接拼接第一帧静态图作为视频
-                createStaticFrameVideo(bitmaps, template, outputFile, outputWidth, outputHeight)
-            } else {
-                // 需要效果：从视频中逐帧提取并处理
-                createEffectVideo(
-                    photos = photos,
-                    bitmaps = bitmaps,
-                    template = template,
-                    outputFile = outputFile,
-                    effects = effects,
-                    cutoutProcessor = cutoutProcessor,
-                    outputWidth = outputWidth,
-                    outputHeight = outputHeight
-                )
+            when {
+                // 没有任何照片带视频 → 用静态图合成一段短视频，保证输出仍是「实况照片」
+                videoPhotos.isEmpty() -> {
+                    createStaticFrameVideo(bitmaps, template, outputFile, outputWidth, outputHeight)
+                }
+                // 有视频但不需要效果 → 静态帧即可（保留拼接画面）
+                !needsEffect -> {
+                    createStaticFrameVideo(bitmaps, template, outputFile, outputWidth, outputHeight)
+                }
+                // 有视频且需要效果 → 逐帧提取并处理
+                else -> {
+                    createEffectVideo(
+                        photos = photos,
+                        bitmaps = bitmaps,
+                        template = template,
+                        outputFile = outputFile,
+                        effects = effects,
+                        cutoutProcessor = cutoutProcessor,
+                        outputWidth = outputWidth,
+                        outputHeight = outputHeight
+                    )
+                }
             }
             outputFile
         } catch (e: Exception) {
@@ -264,6 +270,9 @@ class LivePhotoStitchEngine(private val context: Context) {
 
     /**
      * 创建静态帧视频（从静态图生成短视频）
+     *
+     * 关键：单帧视频如果时长只有 1/30 秒，相册不会把它识别为实况照片。
+     * 所以按最小时长（300ms）重复帧，保证输出是有效的动态照片。
      */
     private fun createStaticFrameVideo(
         bitmaps: List<Bitmap>,
@@ -273,11 +282,13 @@ class LivePhotoStitchEngine(private val context: Context) {
         outputHeight: Int
     ) {
         val background = composeBackground(bitmaps, template, outputWidth, outputHeight)
-        encodeFramesToVideo(listOf(background), outputFile)
+        encodeFramesToVideo(listOf(background), outputFile, minDurationMs = 300)
     }
 
     /**
-     * 创建带效果的视频 —— 从所有视频中提取帧并拼接
+     * 创建带效果的视频 —— 从第一个有视频的照片提取帧并拼接
+     *
+     * 性能要点：ML Kit 抠图结果按「照片」缓存，每帧只重新合成，不重复跑分割。
      */
     private suspend fun createEffectVideo(
         photos: List<LivePhoto>,
@@ -290,7 +301,11 @@ class LivePhotoStitchEngine(private val context: Context) {
         outputHeight: Int
     ) {
         // 找到第一个有视频的照片
-        val firstVideoPhoto = photos.firstOrNull { it.videoUri != null } ?: return
+        val firstVideoPhoto = photos.firstOrNull { it.videoUri != null }
+            ?: run {
+                createStaticFrameVideo(bitmaps, template, outputFile, outputWidth, outputHeight)
+                return
+            }
         val videoUri = firstVideoPhoto.videoUri!!
 
         val retriever = MediaMetadataRetriever()
@@ -300,58 +315,92 @@ class LivePhotoStitchEngine(private val context: Context) {
             MediaMetadataRetriever.METADATA_KEY_DURATION
         )?.toLongOrNull() ?: 0L
 
-        if (durationMs == 0L) {
-            retriever.release()
-            // 降级：静态帧视频
-            val background = composeBackground(bitmaps, template, outputWidth, outputHeight)
-            encodeFramesToVideo(listOf(background), outputFile)
-            return
-        }
-
         // 提取帧（约15fps，减少处理量）
         val frameIntervalUs = 66_000L
         val frames = mutableListOf<Bitmap>()
 
-        var timeUs = 0L
-        while (timeUs < durationMs * 1000) {
-            val frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-            if (frame != null) {
-                frames.add(frame)
+        if (durationMs > 0L) {
+            var timeUs = 0L
+            while (timeUs < durationMs * 1000) {
+                val frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                if (frame != null) {
+                    frames.add(frame)
+                }
+                timeUs += frameIntervalUs
             }
-            timeUs += frameIntervalUs
         }
         retriever.release()
 
+        val firstVideoIndex = photos.indexOf(firstVideoPhoto)
+
+        // 关键优化：把每张照片的「放大人物」只算一次，缓存起来复用
+        val cachedZoomed = mutableListOf<Pair<Bitmap, Triple<Float, Float, Float>>?>()
+
+        if (cutoutProcessor != null) {
+            effects.forEachIndexed { index, effect ->
+                if (!effect.cutoutEnabled || effect.zoomLevel <= 1.0f ||
+                    index >= bitmaps.size || index >= template.layout.size
+                ) {
+                    cachedZoomed.add(null)
+                    return@forEachIndexed
+                }
+
+                val bitmap = bitmaps[index]
+                val destRect = template.layout[index].toRectF(outputWidth, outputHeight)
+                val cutoutResult = cutoutProcessor.cutout(bitmap)
+                if (cutoutResult == null) {
+                    cachedZoomed.add(null)
+                    return@forEachIndexed
+                }
+
+                val zoomedPerson = cutoutProcessor.zoomPerson(
+                    personBitmap = cutoutResult.personBitmap,
+                    maskBitmap = cutoutResult.maskBitmap,
+                    zoomLevel = effect.zoomLevel,
+                    centerX = effect.personCenterX,
+                    centerY = effect.personCenterY
+                )
+
+                val (scaleFactor, offsetX, offsetY) = calcPlacement(bitmap, destRect)
+                val scaledPerson = Bitmap.createScaledBitmap(
+                    zoomedPerson,
+                    (zoomedPerson.width * scaleFactor).toInt(),
+                    (zoomedPerson.height * scaleFactor).toInt(),
+                    true
+                )
+                cachedZoomed.add(scaledPerson to Triple(scaleFactor, offsetX, offsetY))
+            }
+        }
+
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+        fun composeFrame(frameBitmaps: List<Bitmap>): Bitmap {
+            val frameBackground = composeBackground(frameBitmaps, template, outputWidth, outputHeight)
+            val merged = mergeLayers(frameBackground, null)
+
+            // 叠加缓存的人物层
+            cachedZoomed.forEachIndexed { index, entry ->
+                if (entry != null && index < effects.size) {
+                    val (person, placement) = entry
+                    val (_, offsetX, offsetY) = placement
+                    val canvas = Canvas(merged)
+                    canvas.drawBitmap(person, offsetX, offsetY, paint)
+                }
+            }
+            return merged
+        }
+
         if (frames.isEmpty()) {
-            val background = composeBackground(bitmaps, template, outputWidth, outputHeight)
-            encodeFramesToVideo(listOf(background), outputFile)
+            encodeFramesToVideo(listOf(composeFrame(bitmaps)), outputFile, minDurationMs = 300)
             return
         }
 
-        // 对每一帧：使用静态背景 + 动态前景
-        val firstVideoIndex = photos.indexOf(firstVideoPhoto)
-
         val processedFrames = frames.map { frame ->
-            // 如果当前帧来自有视频的照片，替换该位置的静态图
             val frameBitmaps = bitmaps.toMutableList()
             if (firstVideoIndex < frameBitmaps.size) {
                 frameBitmaps[firstVideoIndex] = frame
             }
-
-            // 重新绘制背景
-            val frameBackground = composeBackground(frameBitmaps, template, outputWidth, outputHeight)
-
-            // 应用效果
-            val foreground = processForeground(
-                bitmaps = frameBitmaps,
-                template = template,
-                outputWidth = outputWidth,
-                outputHeight = outputHeight,
-                effects = effects,
-                cutoutProcessor = cutoutProcessor
-            )
-
-            mergeLayers(frameBackground, foreground)
+            composeFrame(frameBitmaps)
         }
 
         encodeFramesToVideo(processedFrames, outputFile)
@@ -361,12 +410,29 @@ class LivePhotoStitchEngine(private val context: Context) {
      * 将帧序列编码为 MP4 视频
      * 使用 MediaCodec + MediaMuxer 编码
      */
-    private fun encodeFramesToVideo(frames: List<Bitmap>, outputFile: File) {
+    private fun encodeFramesToVideo(
+        frames: List<Bitmap>,
+        outputFile: File,
+        minDurationMs: Int = 0
+    ) {
         if (frames.isEmpty()) return
 
         val width = frames[0].width
         val height = frames[0].height
         val frameRate = 30
+
+        // 保证视频时长不小于 minDurationMs（否则相册不认为是实况照片）
+        val effectiveFrames = if (minDurationMs > 0) {
+            val minFrameCount = ((minDurationMs * frameRate) / 1000.0).toInt().coerceAtLeast(1)
+            if (frames.size < minFrameCount) {
+                val last = frames.last()
+                frames + List(minFrameCount - frames.size) { last }
+            } else {
+                frames
+            }
+        } else {
+            frames
+        }
 
         // 确保尺寸是偶数（编码器要求）
         val encWidth = if (width % 2 == 0) width else width - 1
@@ -399,7 +465,7 @@ class LivePhotoStitchEngine(private val context: Context) {
             val frameDurationUs = 1_000_000L / frameRate
             var frameIndex = 0
 
-            frames.forEach { frame ->
+            effectiveFrames.forEach { frame ->
                 // 缩放帧到编码尺寸
                 val scaled = if (frame.width != encWidth || frame.height != encHeight) {
                     Bitmap.createScaledBitmap(frame, encWidth, encHeight, true)
