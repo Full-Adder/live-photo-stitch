@@ -81,7 +81,7 @@ fun LivePhotoStitchApp() {
         composable("preview") {
             PreviewScreen(
                 onBackClick = { navController.popBackStack() },
-                onHomeClick = {
+                onDoneClick = {
                     navController.popBackStack("home", inclusive = false)
                 }
             )

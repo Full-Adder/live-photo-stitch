@@ -210,42 +210,42 @@ object TemplateData {
             id = "horizontal",
             name = "横向三格",
             layout = listOf(
-                TemplateItem(0.05f, 0.25f, 0.28f, 0.5f),
-                TemplateItem(0.36f, 0.25f, 0.28f, 0.5f),
-                TemplateItem(0.67f, 0.25f, 0.28f, 0.5f)
+                TemplateItem(0f, 0f, 1f/3f, 1f),
+                TemplateItem(1f/3f, 0f, 1f/3f, 1f),
+                TemplateItem(2f/3f, 0f, 1f/3f, 1f)
             ),
-            aspectRatio = 16f / 9f,
+            aspectRatio = 3f / 1f,
             thumbnailResId = 0
         ),
         StitchTemplate(
             id = "vertical",
             name = "纵向三格",
             layout = listOf(
-                TemplateItem(0.25f, 0.05f, 0.5f, 0.28f),
-                TemplateItem(0.25f, 0.36f, 0.5f, 0.28f),
-                TemplateItem(0.25f, 0.67f, 0.5f, 0.28f)
+                TemplateItem(0f, 0f, 1f, 1f/3f),
+                TemplateItem(0f, 1f/3f, 1f, 1f/3f),
+                TemplateItem(0f, 2f/3f, 1f, 1f/3f)
             ),
-            aspectRatio = 9f / 16f,
+            aspectRatio = 1f / 3f,
             thumbnailResId = 0
         ),
         StitchTemplate(
             id = "center_large",
             name = "中间大两边小",
             layout = listOf(
-                TemplateItem(0.02f, 0.1f, 0.28f, 0.8f),
-                TemplateItem(0.31f, 0.05f, 0.38f, 0.9f),
-                TemplateItem(0.70f, 0.1f, 0.28f, 0.8f)
+                TemplateItem(0f, 0f, 0.25f, 1f),
+                TemplateItem(0.25f, 0f, 0.5f, 1f),
+                TemplateItem(0.75f, 0f, 0.25f, 1f)
             ),
-            aspectRatio = 16f / 9f,
+            aspectRatio = 2f / 1f,
             thumbnailResId = 0
         ),
         StitchTemplate(
             id = "left_large",
             name = "左大右小",
             layout = listOf(
-                TemplateItem(0.02f, 0.05f, 0.6f, 0.9f),
-                TemplateItem(0.64f, 0.05f, 0.34f, 0.44f),
-                TemplateItem(0.64f, 0.51f, 0.34f, 0.44f)
+                TemplateItem(0f, 0f, 0.6f, 1f),
+                TemplateItem(0.6f, 0f, 0.4f, 0.5f),
+                TemplateItem(0.6f, 0.5f, 0.4f, 0.5f)
             ),
             aspectRatio = 16f / 9f,
             thumbnailResId = 0
@@ -254,22 +254,22 @@ object TemplateData {
             id = "right_large",
             name = "右大左小",
             layout = listOf(
-                TemplateItem(0.02f, 0.05f, 0.34f, 0.44f),
-                TemplateItem(0.02f, 0.51f, 0.34f, 0.44f),
-                TemplateItem(0.38f, 0.05f, 0.6f, 0.9f)
+                TemplateItem(0f, 0f, 0.4f, 0.5f),
+                TemplateItem(0f, 0.5f, 0.4f, 0.5f),
+                TemplateItem(0.4f, 0f, 0.6f, 1f)
             ),
             aspectRatio = 16f / 9f,
             thumbnailResId = 0
         ),
         StitchTemplate(
-            id = "diagonal",
-            name = "对角线布局",
+            id = "grid",
+            name = "九宫格布局",
             layout = listOf(
-                TemplateItem(0.02f, 0.05f, 0.5f, 0.45f),
-                TemplateItem(0.5f, 0.25f, 0.48f, 0.5f),
-                TemplateItem(0.02f, 0.52f, 0.5f, 0.43f)
+                TemplateItem(0f, 0f, 0.5f, 0.5f),
+                TemplateItem(0.5f, 0f, 0.5f, 0.5f),
+                TemplateItem(0f, 0.5f, 1f, 0.5f)
             ),
-            aspectRatio = 16f / 9f,
+            aspectRatio = 4f / 3f,
             thumbnailResId = 0
         )
     )

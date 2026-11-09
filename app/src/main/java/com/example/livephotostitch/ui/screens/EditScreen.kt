@@ -15,16 +15,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
+import com.example.livephotostitch.data.StitchProjectState
 import com.example.livephotostitch.engine.PhotoEffect
 import com.example.livephotostitch.utils.XiaomiIntegration
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditScreen(
-    /** 初始效果配置 */
     initialEffects: List<PhotoEffect> = List(3) { PhotoEffect() },
     onEffectsChanged: (List<PhotoEffect>) -> Unit = {},
     onNextClick: () -> Unit,
@@ -35,6 +37,8 @@ fun EditScreen(
     var effects by remember { mutableStateOf(initialEffects) }
 
     val isXiaomi = XiaomiIntegration.isXiaomiDevice()
+    val photos = StitchProjectState.photos
+    val template = StitchProjectState.template
 
     // 同步效果到外部
     LaunchedEffect(effects) {
@@ -76,8 +80,10 @@ fun EditScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            // 主编辑区域 —— 点击选中某张照片
+            // 主编辑区域 —— 显示真实照片的拼接预览
             StitchPreviewArea(
+                photos = photos,
+                template = template,
                 selectedPhotoIndex = selectedPhotoIndex,
                 effects = effects,
                 onPhotoSelected = { index ->
@@ -112,7 +118,7 @@ fun EditScreen(
                         .align(Alignment.BottomCenter)
                         .padding(bottom = 80.dp)
                 )
-            } else if (selectedTool == CUTOUT_TOOL && selectedPhotoIndex == null) {
+            } else if (selectedTool == EditTool.CUTOUT && selectedPhotoIndex == null) {
                 // 提示用户先选择照片
                 TipCard(
                     text = "请先点击选择一张照片，再使用抠图功能",
@@ -123,7 +129,7 @@ fun EditScreen(
             }
 
             // 小米专属提示
-            if (isXiaomi && selectedTool == CUTOUT_TOOL) {
+            if (isXiaomi && selectedTool == EditTool.CUTOUT) {
                 XiaomiFeatureHint(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
@@ -135,10 +141,12 @@ fun EditScreen(
 }
 
 /**
- * 拼接预览区域 —— 支持点击选中某张照片
+ * 拼接预览区域 —— 显示真实照片
  */
 @Composable
 private fun StitchPreviewArea(
+    photos: List<com.example.livephotostitch.data.model.LivePhoto>,
+    template: com.example.livephotostitch.data.model.StitchTemplate?,
     selectedPhotoIndex: Int?,
     effects: List<PhotoEffect>,
     onPhotoSelected: (Int) -> Unit,
@@ -148,64 +156,80 @@ private fun StitchPreviewArea(
         modifier = modifier,
         contentAlignment = Alignment.Center
     ) {
-        // 使用模板布局显示3个区域
-        // 这里简化为横向三格布局，实际应根据模板渲染
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(16f / 9f)
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            repeat(3) { index ->
-                val isSelected = selectedPhotoIndex == index
-                val effect = effects[index]
+        if (photos.isEmpty() || template == null) {
+            // 没有照片时显示占位
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+                    .padding(16.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("请先选择照片", color = Color.Gray)
+            }
+        } else {
+            // 显示真实照片的拼接预览
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(template.aspectRatio)
+                    .padding(16.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color.Black)
+            ) {
+                // 按照模板布局显示每张照片
+                template.layout.forEachIndexed { index, item ->
+                    if (index < photos.size) {
+                        val isSelected = selectedPhotoIndex == index
+                        val effect = effects.getOrNull(index) ?: PhotoEffect()
 
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(
-                            if (effect.cutoutEnabled && effect.zoomLevel > 1.0f)
-                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-                            else
-                                MaterialTheme.colorScheme.surfaceVariant
-                        )
-                        .border(
-                            width = if (isSelected) 3.dp else 1.dp,
-                            color = if (isSelected)
-                                MaterialTheme.colorScheme.primary
-                            else
-                                Color.Gray.copy(alpha = 0.3f),
-                            shape = RoundedCornerShape(8.dp)
-                        )
-                        .clickable { onPhotoSelected(index) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Icon(
-                            Icons.Default.Image,
-                            contentDescription = "照片 ${index + 1}",
-                            tint = Color.Gray,
-                            modifier = Modifier.size(32.dp)
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "照片 ${index + 1}",
-                            color = Color.Gray,
-                            fontSize = 12.sp
-                        )
-                        if (effect.cutoutEnabled && effect.zoomLevel > 1.0f) {
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = "✨ ${(effect.zoomLevel * 100).toInt()}%",
-                                fontSize = 10.sp,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Bold
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(item.width)
+                                .fillMaxHeight(item.height)
+                                .absoluteOffset(
+                                    x = (item.x * 100).dp,
+                                    y = (item.y * 100).dp
+                                )
+                                .border(
+                                    width = if (isSelected) 3.dp else 0.dp,
+                                    color = if (isSelected)
+                                        MaterialTheme.colorScheme.primary
+                                    else
+                                        Color.Transparent,
+                                    shape = RoundedCornerShape(4.dp)
+                                )
+                                .clickable { onPhotoSelected(index) }
+                        ) {
+                            AsyncImage(
+                                model = photos[index].staticImageUri,
+                                contentDescription = "照片 ${index + 1}",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
                             )
+
+                            // 效果标识
+                            if (effect.cutoutEnabled && effect.zoomLevel > 1.0f) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(4.dp)
+                                        .background(
+                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
+                                            CircleShape
+                                        )
+                                        .padding(4.dp)
+                                ) {
+                                    Text(
+                                        text = "✨${(effect.zoomLevel * 100).toInt()}%",
+                                        color = Color.White,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -347,7 +371,7 @@ private fun ToolButton(
                 color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Gray
             )
 
-            if (tool == CUTOUT_TOOL && isXiaomi) {
+            if (tool == EditTool.CUTOUT && isXiaomi) {
                 Text(
                     text = " 🌟",
                     fontSize = 10.sp
@@ -444,7 +468,7 @@ private fun ZoomPanel(
 }
 
 /**
- * 抠图面板 —— 控制抠图+放大效果
+ * 抠图面板 —— AI 人物抠图 + 放大
  */
 @Composable
 private fun CutoutPanel(
@@ -453,7 +477,7 @@ private fun CutoutPanel(
 ) {
     Column(modifier = Modifier.padding(16.dp)) {
         Text(
-            text = "智能抠图 + 放大",
+            text = "AI 人物突出",
             fontWeight = FontWeight.Bold,
             fontSize = 16.sp
         )
@@ -461,7 +485,7 @@ private fun CutoutPanel(
         Spacer(modifier = Modifier.height(4.dp))
 
         Text(
-            text = "背景保持不变，人物放大并超出边界",
+            text = "自动识别人物，放大并超出边框",
             fontSize = 12.sp,
             color = Color.Gray
         )
@@ -473,7 +497,7 @@ private fun CutoutPanel(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text("启用抠图效果", fontSize = 14.sp, modifier = Modifier.weight(1f))
+            Text("启用 AI 突出", fontSize = 14.sp, modifier = Modifier.weight(1f))
             Switch(
                 checked = effect.cutoutEnabled,
                 onCheckedChange = { enabled ->
@@ -541,22 +565,6 @@ private fun CutoutPanel(
                 )
                 Text("${(effect.personCenterY * 100).toInt()}%", fontSize = 12.sp, color = Color.Gray)
             }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // 背景虚化
-            Text(
-                text = "背景虚化",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium
-            )
-
-            Slider(
-                value = effect.backgroundBlur,
-                onValueChange = { onEffectChange(effect.copy(backgroundBlur = it)) },
-                valueRange = 0f..1f,
-                modifier = Modifier.fillMaxWidth()
-            )
         }
     }
 }
@@ -655,14 +663,9 @@ private fun XiaomiFeatureHint(modifier: Modifier = Modifier) {
     }
 }
 
-/**
- * 抠图工具常量
- */
-val CUTOUT_TOOL = EditTool.CUTOUT
-
 enum class EditTool(val displayName: String, val icon: ImageVector) {
     ZOOM("缩放", Icons.Default.ZoomIn),
-    CUTOUT("抠图", Icons.Default.ContentCut),
+    CUTOUT("AI突出", Icons.Default.ContentCut),
     FILTER("滤镜", Icons.Default.Filter),
     ROTATE("旋转", Icons.Default.RotateRight)
 }

@@ -4,11 +4,10 @@ import android.net.Uri
 import com.example.livephotostitch.data.model.LivePhoto
 import com.example.livephotostitch.data.model.StitchTemplate
 import com.example.livephotostitch.engine.PhotoEffect
+import com.example.livephotostitch.engine.StitchResult
 
 /**
  * 拼接项目的全局状态
- *
- * 在页面之间共享，确保编辑页的效果配置能传递到拼接引擎。
  */
 object StitchProjectState {
     /** 已选择的照片 */
@@ -20,14 +19,14 @@ object StitchProjectState {
     /** 每张照片的效果配置 */
     var effects: List<PhotoEffect> = List(3) { PhotoEffect() }
 
-    /** 最终生成的实况照片 */
-    var resultUri: Uri? = null
+    /** 拼接结果 */
+    var result: StitchResult? = null
 
     fun reset() {
         photos = emptyList()
         template = null
         effects = List(3) { PhotoEffect() }
-        resultUri = null
+        result = null
     }
 
     fun updateEffect(index: Int, effect: PhotoEffect) {
