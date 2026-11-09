@@ -34,7 +34,14 @@ fun EditScreen(
 ) {
     var selectedPhotoIndex by remember { mutableStateOf<Int?>(null) }
     var selectedTool by remember { mutableStateOf<EditTool?>(null) }
-    var effects by remember { mutableStateOf(initialEffects) }
+    // 从全局状态读取，确保与外部同步；如果全局状态不足则用 initialEffects 补充
+    var effects by remember {
+        mutableStateOf(
+            StitchProjectState.effects.takeIf { it.size >= 3 }
+                ?: initialEffects.takeIf { it.size >= 3 }
+                ?: List(3) { PhotoEffect() }
+        )
+    }
 
     val isXiaomi = XiaomiIntegration.isXiaomiDevice()
     val photos = StitchProjectState.photos
@@ -85,7 +92,7 @@ fun EditScreen(
                 },
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(bottom = 80.dp)
+                    .padding(bottom = 64.dp)
             )
 
             // 选中照片指示器
@@ -98,7 +105,7 @@ fun EditScreen(
                 )
             }
 
-            // 工具面板
+            // 工具面板 — 位于底部工具栏上方
             if (selectedTool != null && selectedPhotoIndex != null) {
                 ToolPanel(
                     tool = selectedTool!!,
@@ -110,7 +117,7 @@ fun EditScreen(
                     },
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(bottom = 80.dp)
+                        .padding(bottom = 72.dp)
                 )
             } else if (selectedTool == EditTool.CUTOUT && selectedPhotoIndex == null) {
                 // 提示用户先选择照片
