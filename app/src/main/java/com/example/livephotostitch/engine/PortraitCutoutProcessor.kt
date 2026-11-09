@@ -73,7 +73,16 @@ class MlKitPortraitCutoutProcessor(private val context: Context) : PortraitCutou
                     }
             }
 
-            val maskBitmap = maskBuffer.toBitmap(bitmap.width, bitmap.height)
+            // 关键：ML Kit 的 mask 是模型输入尺寸（通常是 256x256），
+            // 不是原图尺寸。必须按 mask 自身尺寸解析，再放大到原图尺寸，
+            // 否则会越界读取，抠图直接失败。
+            val smallMask = maskBuffer.toMaskBitmap() ?: return null
+            val maskBitmap = if (smallMask.width != bitmap.width || smallMask.height != bitmap.height) {
+                Bitmap.createScaledBitmap(smallMask, bitmap.width, bitmap.height, true)
+            } else {
+                smallMask
+            }
+
             val personBitmap = applyMask(bitmap, maskBitmap)
 
             CutoutResult(maskBitmap, personBitmap)
@@ -141,22 +150,32 @@ class MlKitPortraitCutoutProcessor(private val context: Context) : PortraitCutou
         return outputBitmap
     }
 
-    private fun ByteBuffer.toBitmap(width: Int, height: Int): Bitmap {
+    /**
+     * ML Kit mask（FLOAT，每像素 0-1）→ 灰度透明 Bitmap
+     *
+     * 尺寸由 buffer 自身推断（模型固定 256x256），不能用原图尺寸。
+     */
+    private fun ByteBuffer.toMaskBitmap(): Bitmap? {
         this.rewind()
-        // ML Kit 返回的是 FLOAT 格式的 mask（每个像素一个 float，0-1）
-        // 需要转换为灰度 Bitmap 用于 PorterDuff 遮罩
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        val floatBuffer = this.asFloatBuffer()
-        val pixels = IntArray(width * height)
 
-        for (i in 0 until width * height) {
-            val value = floatBuffer.get(i)
+        val floatCount = this.remaining() / 4
+        if (floatCount <= 0) return null
+
+        val size = kotlin.math.sqrt(floatCount.toFloat()).toInt()
+        if (size <= 0) return null
+
+        val buffer = this.asFloatBuffer()
+        val pixels = IntArray(size * size)
+
+        for (i in 0 until size * size) {
+            val value = buffer.get(i)
             val alpha = (value.coerceIn(0f, 1f) * 255).toInt()
-            // 白色 + 透明度表示 mask
+            // 白色 + alpha 表示"这个像素是人物"的置信度
             pixels[i] = (alpha shl 24) or 0x00FFFFFF
         }
 
-        bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
-        return bitmap
+        return Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).apply {
+            setPixels(pixels, 0, size, 0, 0, size, size)
+        }
     }
 }
