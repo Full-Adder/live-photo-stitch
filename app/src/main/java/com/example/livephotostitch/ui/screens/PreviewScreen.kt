@@ -49,10 +49,12 @@ fun PreviewScreen(
     var result by remember { mutableStateOf<StitchResult?>(null) }
     var showSaveDialog by remember { mutableStateOf(false) }
     var isSaved by remember { mutableStateOf(false) }
+    var isSaving by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var retryKey by remember { mutableStateOf(0) }
 
-    // 进入页面自动开始处理
-    LaunchedEffect(Unit) {
+    // 进入页面自动开始处理，retryKey 变化时重新处理
+    LaunchedEffect(retryKey) {
         isProcessing = true
         processingProgress = 0f
         isSaved = false
@@ -125,9 +127,9 @@ fun PreviewScreen(
                     Button(
                         onClick = { showSaveDialog = true },
                         modifier = Modifier.weight(1f),
-                        enabled = !isProcessing && result != null
+                        enabled = !isProcessing && !isSaving && result != null
                     ) {
-                        if (isProcessing) {
+                        if (isSaving) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(16.dp),
                                 strokeWidth = 2.dp,
@@ -155,15 +157,15 @@ fun PreviewScreen(
                     ErrorMessage(
                         message = errorMessage!!,
                         onRetry = {
-                            isProcessing = true
-                            errorMessage = null
+                            retryKey++
                         }
                     )
                 }
                 stitchedBitmap != null -> {
                     ResultPreview(
                         bitmap = stitchedBitmap!!,
-                        isLivePhoto = result?.isLivePhoto == true
+                        isLivePhoto = result?.isLivePhoto == true,
+                        isSaved = isSaved
                     )
                 }
                 else -> {
@@ -195,8 +197,7 @@ fun PreviewScreen(
                 TextButton(
                     onClick = {
                         showSaveDialog = false
-                        isProcessing = true
-                        processingProgress = 0f
+                        isSaving = true
 
                         scope.launch {
                             try {
@@ -206,9 +207,11 @@ fun PreviewScreen(
                                 )
                                 if (saved) {
                                     isSaved = true
+                                } else {
+                                    errorMessage = "保存失败，请重试"
                                 }
                             } finally {
-                                isProcessing = false
+                                isSaving = false
                             }
                         }
                     }
@@ -291,7 +294,8 @@ private fun ErrorMessage(
 @Composable
 private fun ResultPreview(
     bitmap: android.graphics.Bitmap,
-    isLivePhoto: Boolean
+    isLivePhoto: Boolean,
+    isSaved: Boolean = false
 ) {
     Box(
         modifier = Modifier
@@ -342,6 +346,27 @@ private fun ResultPreview(
                             fontWeight = FontWeight.Bold
                         )
                     }
+                }
+            }
+
+            // 保存成功提示
+            if (isSaved) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(12.dp)
+                        .background(
+                            Color(0xFF4CAF50).copy(alpha = 0.9f),
+                            RoundedCornerShape(12.dp)
+                        )
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = "✅ 已保存到相册",
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
         }
