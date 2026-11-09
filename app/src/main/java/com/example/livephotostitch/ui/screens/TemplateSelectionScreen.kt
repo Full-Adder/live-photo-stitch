@@ -182,22 +182,28 @@ private fun TemplatePreview(
     template: StitchTemplate,
     modifier: Modifier = Modifier
 ) {
-    Box(modifier = modifier.padding(8.dp)) {
+    val density = androidx.compose.ui.platform.LocalDensity.current
+
+    BoxWithConstraints(modifier = modifier.padding(8.dp)) {
+        val boxWidthPx = constraints.maxWidth.toFloat()
+        val boxHeightPx = constraints.maxHeight.toFloat()
+
         template.layout.forEachIndexed { index, item ->
             val colors = listOf(
                 Color(0xFFE3F2FD),
                 Color(0xFFF3E5F5),
                 Color(0xFFE8F5E9)
             )
-            
+
+            val cellWidthDp = with(density) { (item.width * boxWidthPx).toDp() }
+            val cellHeightDp = with(density) { (item.height * boxHeightPx).toDp() }
+            val cellXDp = with(density) { (item.x * boxWidthPx).toDp() }
+            val cellYDp = with(density) { (item.y * boxHeightPx).toDp() }
+
             Box(
                 modifier = Modifier
-                    .fillMaxWidth(item.width)
-                    .fillMaxHeight(item.height)
-                    .absoluteOffset(
-                        x = (item.x * 100).dp,
-                        y = (item.y * 100).dp
-                    )
+                    .absoluteOffset(x = cellXDp, y = cellYDp)
+                    .size(width = cellWidthDp, height = cellHeightDp)
                     .background(
                         colors[index % colors.size],
                         RoundedCornerShape(4.dp)
@@ -268,7 +274,7 @@ object TemplateData {
         ),
         StitchTemplate(
             id = "grid",
-            name = "九宫格布局",
+            name = "四宫格布局",
             layout = listOf(
                 TemplateItem(0f, 0f, 0.5f, 0.5f),
                 TemplateItem(0.5f, 0f, 0.5f, 0.5f),
